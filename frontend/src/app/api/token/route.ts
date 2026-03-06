@@ -2,9 +2,9 @@ import { AccessToken } from "livekit-server-sdk";
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
-  const livekitUrl = process.env.LIVEKIT_URL;
+  const apiKey = process.env.NEXT_PUBLIC_LIVEKIT_API_KEY;
+  const apiSecret = process.env.NEXT_PUBLIC_LIVEKIT_API_SECRET;
+  const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
 
   if (!apiKey || !apiSecret || !livekitUrl) {
     return NextResponse.json(
