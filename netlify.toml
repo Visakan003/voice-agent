@@ -1,0 +1,10 @@
+# Netlify config for voice-agent (Next.js frontend in /frontend)
+# Base = where the app lives; Publish must be different (e.g. .next).
+
+[build]
+  base = "frontend"
+  publish = ".next"
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
