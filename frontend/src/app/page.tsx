@@ -181,15 +181,26 @@ export default function Home() {
     url: string;
   } | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
 
   const startCall = useCallback(async () => {
+    setTokenError(null);
     setIsConnecting(true);
     try {
       const response = await fetch("/api/token");
       const data = await response.json();
+      if (!response.ok) {
+        setTokenError(data.detail ?? data.error ?? "Failed to get token");
+        return;
+      }
+      if (!data.token || !data.url) {
+        setTokenError("Invalid token response");
+        return;
+      }
       setConnectionDetails({ token: data.token, url: data.url });
     } catch (error) {
       console.error("Failed to get token:", error);
+      setTokenError("Could not reach server. Check network and try again.");
     } finally {
       setIsConnecting(false);
     }
@@ -239,6 +250,12 @@ export default function Home() {
           <line x1="8" y1="23" x2="16" y2="23" />
         </svg>
       </div>
+
+      {tokenError && (
+        <p className="text-red-400 text-center max-w-md text-sm" role="alert">
+          {tokenError}
+        </p>
+      )}
 
       <button
         onClick={startCall}
