@@ -9,6 +9,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
+from livekit.agents.worker import JobExecutorType
 from livekit.plugins import openai, silero
 
 load_dotenv()
@@ -131,5 +132,9 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
+            # Use PROCESS so each room gets its own process; allows multiple concurrent calls.
+            job_executor_type=JobExecutorType.PROCESS,
+            # Keep several processes warm so multiple users can connect at once.
+            num_idle_processes=3,
         ),
     )
