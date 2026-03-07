@@ -15,7 +15,7 @@ export async function GET() {
       {
         error: "Server misconfigured",
         detail:
-          "Set LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and NEXT_PUBLIC_LIVEKIT_URL in Netlify (or .env.local).",
+          "Set NEXT_PUBLIC_LIVEKIT_API_KEY, NEXT_PUBLIC_LIVEKIT_API_SECRET, and NEXT_PUBLIC_LIVEKIT_URL in Netlify (or .env.local).",
       },
       { status: 500 }
     );
