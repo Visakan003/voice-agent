@@ -52,8 +52,8 @@ function SpeakingAnimation({ state }: { state: string }) {
             backgroundColor: isSpeaking
               ? "#3b82f6"
               : isListening
-              ? "#22c55e"
-              : "#374151",
+                ? "#22c55e"
+                : "#374151",
           }}
         >
           {/* Mic icon */}
@@ -96,10 +96,10 @@ function SpeakingAnimation({ state }: { state: string }) {
         {state === "speaking"
           ? "Agent is speaking..."
           : state === "listening"
-          ? "Listening..."
-          : state === "thinking"
-          ? "Thinking..."
-          : "Connected"}
+            ? "Listening..."
+            : state === "thinking"
+              ? "Thinking..."
+              : "Connected"}
       </p>
     </div>
   );
@@ -127,11 +127,10 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
         {/* Mute / Unmute */}
         <button
           onClick={toggleMute}
-          className={`px-6 py-3 rounded-full font-medium transition-colors ${
-            isMuted
+          className={`px-6 py-3 rounded-full font-medium transition-colors ${isMuted
               ? "bg-yellow-600 hover:bg-yellow-700"
               : "bg-gray-700 hover:bg-gray-600"
-          }`}
+            }`}
         >
           {isMuted ? (
             <span className="flex items-center gap-2">
@@ -213,6 +212,7 @@ export default function Home() {
   if (connectionDetails) {
     return (
       <LiveKitRoom
+        key={connectionDetails.token}
         token={connectionDetails.token}
         serverUrl={connectionDetails.url}
         connect={true}

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-
+export const dynamic = "force-dynamic";
 /**
  * GET /api/token/check - Safe check that LiveKit env vars are set (no values exposed).
  * Use this to verify Netlify has the right env at runtime when things work "sometimes".
