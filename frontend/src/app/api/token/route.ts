@@ -27,7 +27,7 @@ export async function GET() {
   try {
     const at = new AccessToken(apiKey.trim(), apiSecret.trim(), {
       identity: participantName,
-      ttl: "5m",
+      ttl: "15m",
     });
     at.addGrant({
       roomJoin: true,
@@ -38,11 +38,17 @@ export async function GET() {
 
     const token = await at.toJwt();
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       token,
       url: livekitUrl.trim().replace(/^http:/, "ws:").replace(/^https:/, "wss:"),
       roomName,
     });
+
+    // Prevent caching so every "Start Call" gets a fresh token (avoids 401 after a few minutes)
+    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response.headers.set("Pragma", "no-cache");
+
+    return response;
   } catch (e) {
     console.error("Token generation failed:", e);
     return NextResponse.json(

@@ -187,7 +187,7 @@ export default function Home() {
     setTokenError(null);
     setIsConnecting(true);
     try {
-      const response = await fetch("/api/token");
+      const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) {
         setTokenError(data.detail ?? data.error ?? "Failed to get token");
