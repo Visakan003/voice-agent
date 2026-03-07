@@ -134,7 +134,7 @@ if __name__ == "__main__":
             prewarm_fnc=prewarm,
             # Use PROCESS so each room gets its own process; allows multiple concurrent calls.
             job_executor_type=JobExecutorType.PROCESS,
-            # Keep several processes warm so multiple users can connect at once.
-            num_idle_processes=3,
+            # Keep several processes warm so multiple users can connect at once. Increase if you need more.
+            num_idle_processes=5,
         ),
     )

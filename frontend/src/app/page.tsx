@@ -178,6 +178,7 @@ export default function Home() {
   const [connectionDetails, setConnectionDetails] = useState<{
     token: string;
     url: string;
+    roomName: string;
   } | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
@@ -196,7 +197,7 @@ export default function Home() {
         setTokenError("Invalid token response");
         return;
       }
-      setConnectionDetails({ token: data.token, url: data.url });
+      setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName });
     } catch (error) {
       console.error("Failed to get token:", error);
       setTokenError("Could not reach server. Check network and try again.");

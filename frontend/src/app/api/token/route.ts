@@ -1,5 +1,7 @@
+export const dynamic = "force-dynamic";
+
 import { AccessToken } from "livekit-server-sdk";
-import { NextResponse } from "next/server";
+import { NextResponse } from "next/server"; 
 
 export async function GET() {
   // Prefer server-only env vars (Netlify/production). Fallback to NEXT_PUBLIC_ for local dev.
@@ -21,7 +23,7 @@ export async function GET() {
     );
   }
 
-  const roomName = `room-${Math.random().toString(36).substring(7)}`;
+  const roomName = `room-${crypto.randomUUID()}`;
   const participantName = `user-${Math.random().toString(36).substring(7)}`;
 
   try {
