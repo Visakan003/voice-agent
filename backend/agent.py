@@ -117,7 +117,7 @@ async def entrypoint(ctx: JobContext):
         ),
         stt=openai.STT(model="gpt-4o-transcribe"),
         llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(model="tts-1", voice="shimmer", speed=1.15),
+        tts=openai.TTS(model="tts-1", voice="shimmer", speed=1),
         vad=ctx.proc.userdata["vad"],
     )
 
