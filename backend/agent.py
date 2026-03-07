@@ -117,7 +117,12 @@ async def entrypoint(ctx: JobContext):
         ),
         stt=openai.STT(model="gpt-4o-transcribe"),
         llm=openai.LLM(model="gpt-4o-mini"),
-        tts=openai.TTS(model="tts-1", voice="shimmer", speed=1),
+        tts=openai.TTS(
+            model="gpt-4o-mini-tts",
+            voice="marin",
+            speed=1.00,
+            instructions="Speak in a warm, friendly, and conversational tone. Sound natural and human, not robotic. Use slight natural variation in pacing and emphasis.",
+        ),
         vad=ctx.proc.userdata["vad"],
     )
 
