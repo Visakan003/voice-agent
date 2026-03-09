@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "LiveKit Voice Assistant",
+  title: "Dailzia Voice Assistant",
   description: "Talk with an AI voice assistant",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({
