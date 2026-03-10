@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Dailzia Voice Assistant",
-  description: "Talk with an AI voice assistant",
+  description: "Talk with Zia, our  AI voice assistant",
   icons: {
     icon: "/favicon.png",
   },

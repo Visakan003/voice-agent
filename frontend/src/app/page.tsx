@@ -119,7 +119,7 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-8">
-      <h1 className="text-2xl font-semibold">Voice Assistant</h1>
+      <h1 className="text-2xl font-semibold">Talk to Zia</h1>
 
       <SpeakingAnimation state={state} />
 
@@ -227,10 +227,10 @@ export default function Home() {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-8">
-      <h1 className="text-3xl font-bold">Voice Assistant</h1>
+      <img src="/dialzia.png" alt="Zia" className="w-24 h-24" />
+      <h1 className="text-3xl font-bold">Talk to Zia</h1>
       <p className="text-gray-400 text-center max-w-md">
-        Click the button below to start a conversation with the AI voice
-        assistant.
+      Click the button below to start a conversation with Zia,<br/> our AI voice assistant.
       </p>
 
       {/* Mic icon */}
@@ -261,7 +261,7 @@ export default function Home() {
       <button
         onClick={startCall}
         disabled={isConnecting}
-        className="px-8 py-4 rounded-full font-medium bg-blue-600 hover:bg-blue-700 transition-colors text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3"
+        className="px-10 py-4 rounded-full font-semibold text-lg text-white bg-gradient-to-r from-purple-500 via-fuchsia-500 to-indigo-500 shadow-[0_0_25px_rgba(168,85,247,0.6)] hover:shadow-[0_0_45px_rgba(168,85,247,0.9)] hover:from-purple-400 hover:via-fuchsia-400 hover:to-indigo-400 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-3"
       >
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2z" />
