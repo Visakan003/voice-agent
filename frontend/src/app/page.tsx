@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   LiveKitRoom,
   useVoiceAssistant,
@@ -110,10 +110,22 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const { localParticipant } = useLocalParticipant();
   const [isMuted, setIsMuted] = useState(false);
 
+  // Request mic only after connection so the greeting plays first (no mic prompt blocking).
+  useEffect(() => {
+    if (!localParticipant || isMuted) return;
+    const t = setTimeout(() => {
+      localParticipant.setMicrophoneEnabled(true).catch((err) => {
+        console.error("Failed to enable microphone:", err);
+      });
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [localParticipant, isMuted]);
+
   const toggleMute = useCallback(async () => {
     if (localParticipant) {
-      await localParticipant.setMicrophoneEnabled(isMuted);
-      setIsMuted(!isMuted);
+      const nextMuted = !isMuted;
+      await localParticipant.setMicrophoneEnabled(!nextMuted);
+      setIsMuted(nextMuted);
     }
   }, [localParticipant, isMuted]);
 
@@ -217,7 +229,7 @@ export default function Home() {
         token={connectionDetails.token}
         serverUrl={connectionDetails.url}
         connect={true}
-        audio={true}
+        audio={false}
         onDisconnected={endCall}
       >
         <VoiceAssistantUI onDisconnect={endCall} />
