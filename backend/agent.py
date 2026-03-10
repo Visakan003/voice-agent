@@ -39,7 +39,7 @@ async def entrypoint(ctx: JobContext):
         llm=openai.realtime.RealtimeModel(
             model="gpt-realtime-1.5",
             voice="marin",
-            speed=1.08,
+            speed=0.90,
             turn_detection=ServerVad(
                 type="server_vad",
                 threshold=0.6,  # Higher = less sensitive; filters background noise, only clear speech triggers
