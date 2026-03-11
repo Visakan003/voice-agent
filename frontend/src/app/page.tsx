@@ -110,16 +110,20 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const { localParticipant } = useLocalParticipant();
   const [isMuted, setIsMuted] = useState(false);
 
-  // Request mic only after connection so the greeting plays first (no mic prompt blocking).
+  // Enable mic quickly on connect. Auto-greeting is disabled server-side to avoid cold-start delay.
   useEffect(() => {
-    if (!localParticipant || isMuted) return;
-    const t = setTimeout(() => {
-      localParticipant.setMicrophoneEnabled(true).catch((err) => {
+    if (!localParticipant) return;
+  
+    const enableMic = async () => {
+      try {
+        await localParticipant.setMicrophoneEnabled(true);
+      } catch (err) {
         console.error("Failed to enable microphone:", err);
-      });
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [localParticipant, isMuted]);
+      }
+    };
+  
+    enableMic();
+  }, [localParticipant]);
 
   const toggleMute = useCallback(async () => {
     if (localParticipant) {
@@ -194,13 +198,20 @@ export default function Home() {
   } | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [connectStartAt, setConnectStartAt] = useState<number | null>(null);
 
   const startCall = useCallback(async () => {
     setTokenError(null);
     setIsConnecting(true);
+    const started = performance.now();
+    setConnectStartAt(started);
+    console.info("[voice] Start Call clicked");
     try {
       const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
       const data = await response.json();
+      const tokenMs = Math.round(performance.now() - started);
+      const tokenHeader = response.headers.get("x-token-gen-ms");
+      console.info("[voice] Token received", { totalMs: tokenMs, tokenGenMs: tokenHeader });
       if (!response.ok) {
         setTokenError(data.detail ?? data.error ?? "Failed to get token");
         return;
@@ -229,7 +240,14 @@ export default function Home() {
         token={connectionDetails.token}
         serverUrl={connectionDetails.url}
         connect={true}
-        audio={false}
+        audio={true}
+        onConnected={() => {
+          const total = connectStartAt ? Math.round(performance.now() - connectStartAt) : null;
+          console.info("[voice] LiveKit connected", { totalMsSinceClick: total });
+        }}
+        onError={(err) => {
+          console.error("[voice] LiveKit connection error", err);
+        }}
         onDisconnected={endCall}
       >
         <VoiceAssistantUI onDisconnect={endCall} />
