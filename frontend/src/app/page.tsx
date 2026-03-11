@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   LiveKitRoom,
   useVoiceAssistant,
   RoomAudioRenderer,
   useLocalParticipant,
+  useRoomContext,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 
@@ -106,26 +107,51 @@ function SpeakingAnimation({ state }: { state: string }) {
 }
 
 function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
-  const { state } = useVoiceAssistant();
+  const { state, audioTrack } = useVoiceAssistant();
   const { localParticipant } = useLocalParticipant();
+  const room = useRoomContext();
   const [isMuted, setIsMuted] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+  const micEnabledRef = useRef(false);
 
-  // Request mic only after connection so the greeting plays first (no mic prompt blocking).
+  // Debug: Log state changes
   useEffect(() => {
-    if (!localParticipant || isMuted) return;
-    const t = setTimeout(() => {
-      localParticipant.setMicrophoneEnabled(true).catch((err) => {
+    console.log("Voice assistant state:", state);
+  }, [state]);
+
+  // Enable microphone once when component mounts and room is ready
+  useEffect(() => {
+    if (!localParticipant || micEnabledRef.current) return;
+    
+    const enableMic = async () => {
+      try {
+        console.log("Attempting to enable microphone...");
+        await localParticipant.setMicrophoneEnabled(true);
+        micEnabledRef.current = true;
+        console.log("Microphone enabled successfully");
+        setMicError(null);
+      } catch (err) {
         console.error("Failed to enable microphone:", err);
-      });
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [localParticipant, isMuted]);
+        setMicError("Microphone access denied. Please check permissions.");
+      }
+    };
+
+    // Small delay to ensure room is fully connected
+    const timer = setTimeout(enableMic, 2000);
+    return () => clearTimeout(timer);
+  }, [localParticipant]);
 
   const toggleMute = useCallback(async () => {
     if (localParticipant) {
       const nextMuted = !isMuted;
-      await localParticipant.setMicrophoneEnabled(!nextMuted);
-      setIsMuted(nextMuted);
+      try {
+        await localParticipant.setMicrophoneEnabled(!nextMuted);
+        setIsMuted(nextMuted);
+        micEnabledRef.current = !nextMuted;
+        console.log("Microphone", nextMuted ? "muted" : "unmuted");
+      } catch (err) {
+        console.error("Failed to toggle mute:", err);
+      }
     }
   }, [localParticipant, isMuted]);
 
@@ -135,48 +161,28 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
 
       <SpeakingAnimation state={state} />
 
+      {micError && (
+        <p className="text-yellow-400 text-sm">{micError}</p>
+      )}
+
       <div className="flex gap-4">
         {/* Mute / Unmute */}
         <button
           onClick={toggleMute}
-          className={`px-6 py-3 rounded-full font-medium transition-colors ${isMuted
+          className={`px-6 py-3 rounded-full font-medium transition-colors ${
+            isMuted
               ? "bg-yellow-600 hover:bg-yellow-700"
               : "bg-gray-700 hover:bg-gray-600"
-            }`}
+          }`}
         >
-          {isMuted ? (
-            <span className="flex items-center gap-2">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="1" y1="1" x2="23" y2="23" />
-                <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
-                <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .76-.13 1.49-.36 2.18" />
-                <line x1="12" y1="19" x2="12" y2="23" />
-                <line x1="8" y1="23" x2="16" y2="23" />
-              </svg>
-              Unmute
-            </span>
-          ) : (
-            <span className="flex items-center gap-2">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                <line x1="12" y1="19" x2="12" y2="23" />
-                <line x1="8" y1="23" x2="16" y2="23" />
-              </svg>
-              Mute
-            </span>
-          )}
+          {isMuted ? "Unmute" : "Mute"}
         </button>
 
         {/* End Call */}
         <button
           onClick={onDisconnect}
-          className="px-6 py-3 rounded-full font-medium bg-red-600 hover:bg-red-700 transition-colors flex items-center gap-2"
+          className="px-6 py-3 rounded-full font-medium bg-red-600 hover:bg-red-700 transition-colors"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91" />
-            <line x1="23" y1="1" x2="1" y2="23" />
-          </svg>
           End Call
         </button>
       </div>
@@ -194,55 +200,97 @@ export default function Home() {
   } | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const isConnectedRef = useRef(false);
 
   const startCall = useCallback(async () => {
+    // Prevent multiple connection attempts
+    if (isConnecting || isConnectedRef.current) return;
+    
     setTokenError(null);
     setIsConnecting(true);
+    
     try {
-      const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
+      const response = await fetch(`/api/token?t=${Date.now()}`, { 
+        cache: "no-store",
+        headers: {
+          'Cache-Control': 'no-cache'
+        }
+      });
+      
       const data = await response.json();
+      
       if (!response.ok) {
         setTokenError(data.detail ?? data.error ?? "Failed to get token");
         return;
       }
+      
       if (!data.token || !data.url) {
         setTokenError("Invalid token response");
         return;
       }
-      setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName });
+      
+      console.log("Connection details received:", { 
+        url: data.url, 
+        roomName: data.roomName 
+      });
+      
+      // Set connection details to trigger LiveKitRoom mount
+      setConnectionDetails({ 
+        token: data.token, 
+        url: data.url, 
+        roomName: data.roomName 
+      });
+      
     } catch (error) {
       console.error("Failed to get token:", error);
       setTokenError("Could not reach server. Check network and try again.");
     } finally {
       setIsConnecting(false);
     }
-  }, []);
+  }, [isConnecting]);
 
   const endCall = useCallback(() => {
+    console.log("Ending call...");
+    isConnectedRef.current = false;
     setConnectionDetails(null);
   }, []);
 
+  const handleConnected = useCallback(() => {
+    console.log("LiveKitRoom connected successfully");
+    isConnectedRef.current = true;
+  }, []);
+
+  const handleDisconnected = useCallback(() => {
+    console.log("LiveKitRoom disconnected");
+    isConnectedRef.current = false;
+  }, []);
+
+  // If we have connection details, render LiveKitRoom
   if (connectionDetails) {
     return (
       <LiveKitRoom
-        key={connectionDetails.token}
+        key={connectionDetails.roomName} // Use roomName as key to force re-mount on new calls
         token={connectionDetails.token}
         serverUrl={connectionDetails.url}
         connect={true}
-        audio={false}
-        onDisconnected={endCall}
+        audio={true}
+        video={false}
+        onConnected={handleConnected}
+        onDisconnected={handleDisconnected}
+        onError={(error) => console.error("LiveKitRoom error:", error)}
       >
         <VoiceAssistantUI onDisconnect={endCall} />
       </LiveKitRoom>
     );
   }
 
+  // Otherwise show the start screen
   return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-8">
       <img src="/dialzia.png" alt="Zia" className="w-24 h-24" />
       <h1 className="text-3xl font-bold">Talk to Zia</h1>
       <p className="text-gray-400 text-center max-w-md">
-      Click the button below to start a conversation with Zia,<br/> our AI voice assistant.
+        Click the button below to start a conversation with Zia,<br/> our AI voice assistant.
       </p>
 
       {/* Mic icon */}

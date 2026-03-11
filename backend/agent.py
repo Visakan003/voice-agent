@@ -1,20 +1,23 @@
 import asyncio
 import logging
+import os
+from urllib.parse import urlparse
+
+import aiohttp
 from dotenv import load_dotenv
 
 from livekit.agents import (
-    Agent,
-    AgentSession,
     AutoSubscribe,
     JobContext,
     JobProcess,
     WorkerOptions,
     cli,
+    llm,
+    ChatMessage,
 )
-
+from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.plugins import openai, silero
 from livekit.agents.worker import JobExecutorType
-from livekit.plugins import openai
-from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from pathlib import Path
 
@@ -26,105 +29,107 @@ load_dotenv()
 logger = logging.getLogger("voice-assistant")
 logger.setLevel(logging.INFO)
 
+# Add file handler for better debugging
+file_handler = logging.FileHandler('voice-assistant.log')
+file_handler.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+
+# Also log to console
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+logger.addHandler(console_handler)
+
+
+_ORIGINAL_WS_CONNECT = aiohttp.ClientSession.ws_connect
+
+
+async def _patched_ws_connect(self, url, *args, **kwargs):
+    """
+    Local workaround: bypass TLS hostname verification for LiveKit websocket hosts.
+    """
+    skip_verify = os.getenv("LIVEKIT_SKIP_SSL_VERIFY", "1").strip().lower() in {"1", "true", "yes"}
+    parsed = urlparse(str(url))
+    host = parsed.hostname or ""
+    if skip_verify and host.endswith(".livekit.cloud") and "ssl" not in kwargs:
+        kwargs["ssl"] = False
+        logger.warning("LIVEKIT TLS verification disabled for host: %s", host)
+    return await _ORIGINAL_WS_CONNECT(self, url, *args, **kwargs)
+
+
+aiohttp.ClientSession.ws_connect = _patched_ws_connect
+
 
 def prewarm(proc: JobProcess):
-    pass
+    """Pre-warm function called when the worker process starts."""
+    logger.info("Prewarming process")
+    # Preload silero VAD model
+    silero.VAD.load()
 
 
 async def entrypoint(ctx: JobContext):
-
+    logger.info("Connecting to room: %s", ctx.room.name)
+    
+    # Connect to the room
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-
-    session = AgentSession(
-        llm=openai.realtime.RealtimeModel(
-            model="gpt-realtime-1.5",
-            voice="marin",
-            speed=0.90,
-            turn_detection=ServerVad(
-                type="server_vad",
-                threshold=0.6,  # Higher = less sensitive; filters background noise, only clear speech triggers
-                silence_duration_ms=450,  # Longer silence before turn ends; avoids reacting to brief noises
-                prefix_padding_ms=300,
-                create_response=True,
-                interrupt_response=True,
-            ),
+    
+    # Wait for participant to join
+    participant = await ctx.wait_for_participant()
+    logger.info(f"Participant joined: {participant.identity}")
+    
+    # Initialize the LLM
+    openai_llm = openai.LLM(
+        model="gpt-4o-mini",  # Using standard model for now
+    )
+    
+    # Initialize the voice assistant
+    assistant = VoiceAssistant(
+        vad=silero.VAD(),  # Voice Activity Detection
+        stt=openai.STT(),  # Speech to Text
+        llm=openai_llm,    # Language Model
+        tts=openai.TTS(),  # Text to Speech
+        chat_ctx=llm.ChatContext().append(
+            role="system",
+            text=KNOWLEDGE_PROMPT,
         ),
     )
-
-    # agent = Agent(
-    #     instructions=(
-    #         "You are Zia, the AI sales agent for Atlasium 7/88 AI. "
-    #         "Speak naturally like a real person — use casual language, contractions, and a conversational tone. "
-    #         "Avoid sounding robotic or scripted. Use natural filler phrases like 'sure', 'of course', 'absolutely'. "
-    #         "Keep responses short and friendly. Always respond in English only.\n\n"
-
-    #         "COMMUNICATION STYLE:\n"
-    #         "- Warm, confident, conversational tone.\n"
-    #         "- Use contractions.\n"
-    #         "- Keep responses short (1-4 sentences).\n"
-    #         "- Ask follow-up questions.\n\n"
-
-    #         "STRICT KNOWLEDGE RULES:\n"
-    #         "- Only use information provided.\n"
-    #         "- Do NOT invent details.\n"
-    #         "- If outside knowledge say: "
-    #         "'I'm not familiar with that. I can only help with Atlasium 7/88 AI services.'\n\n"
-
-    #         "BOOKING RULES:\n"
-    #         "- Do NOT schedule meetings.\n"
-    #         "- Direct users to fill the demo form on the website.\n\n"
-
-    #         "PRICING RULES:\n"
-    #         "- Never provide pricing.\n"
-    #         "- Say pricing is discussed during the walkthrough.\n\n"
-
-    #         "COMPANY KNOWLEDGE:\n"
-    #         "Atlasium 7/88 AI is a full-stack AI automation platform for businesses. "
-    #         "It handles lead generation, booking, sales follow-up, and operations automation.\n\n"
-
-    #         "CORE PRODUCTS:\n"
-    #         "- XipherX: AI lead generation engine.\n"
-    #         "- DialZia: AI call, text, and email booking assistant.\n"
-    #         "- CoreIQ: Data intelligence and CRM hub.\n\n"
-
-    #         "FLOW:\n"
-    #         "XipherX finds leads → DialZia engages → CoreIQ organizes and tracks.\n\n"
-
-    #         "INDUSTRIES:\n"
-    #         "Real estate, mortgage, insurance, law firms, clinics, contractors, ecommerce, SaaS, agencies.\n\n"
-
-    #         "PRONUNCIATION GUIDE:\n"
-    #         "Atlasium = At-LAY-zee-um\n"
-    #         "XipherX = ZY-fer-X\n"
-    #         "DialZia = Dial-Zee-ah\n"
-    #         "CoreIQ = Core-I-Q\n"
-    #     ),
-    # )
-    agent = Agent(
-        instructions=KNOWLEDGE_PROMPT,
-    )
-
-    await session.start(agent=agent, room=ctx.room)
-
-    logger.info("Agent session started for room %s", ctx.room.name)
-
-    # Greet first via generate_reply so the session stays in the right state (listening + speaking).
-    await session.generate_reply(
-        instructions="Say exactly once: Hey there! I'm Zia from Atlasium. How can I help you today?"
-    )
-
-    # Keep agent alive
-    while True:
-        await asyncio.sleep(1)
+    
+    # Start the assistant
+    assistant.start(ctx.room)
+    
+    logger.info("Voice assistant started for room %s", ctx.room.name)
+    
+    # Greet the user after a short delay
+    await asyncio.sleep(1)
+    await assistant.say("Hey there! I'm Zia from Atlasium. How can I help you today?", allow_interruptions=True)
+    
+    logger.info("Greeting sent")
+    
+    # Keep the agent alive
+    try:
+        while True:
+            await asyncio.sleep(1)
+            
+            # Log assistant state periodically for debugging
+            if hasattr(assistant, '_state'):
+                logger.debug(f"Assistant state: {assistant._state}")
+                
+    except asyncio.CancelledError:
+        logger.info("Agent session cancelled")
+    except Exception as e:
+        logger.error(f"Unexpected error in main loop: {e}")
+    finally:
+        logger.info("Cleaning up agent session")
+        assistant.stop()
 
 
 if __name__ == "__main__":
-
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
             job_executor_type=JobExecutorType.PROCESS,
             num_idle_processes=1,
+            # Add these for better debugging
+            agent_name="zia-voice-assistant",
         ),
     )
