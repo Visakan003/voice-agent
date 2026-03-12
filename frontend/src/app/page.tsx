@@ -185,10 +185,10 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
     };
   }, [room]);
 
-  // Enable mic quickly on connect. Auto-greeting is disabled server-side to avoid cold-start delay.
+  // Enable mic only after the room is connected so the SDK has full context (avoids "publishing track { room: undefined, ... }" log).
   useEffect(() => {
-    if (!localParticipant) return;
-  
+    if (!room || !localParticipant) return;
+
     const enableMic = async () => {
       try {
         await localParticipant.setMicrophoneEnabled(true);
@@ -196,9 +196,16 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
         console.error("Failed to enable microphone:", err);
       }
     };
-  
-    enableMic();
-  }, [localParticipant]);
+
+    if (room.state === "connected") {
+      enableMic();
+      return;
+    }
+    room.on("connected", enableMic);
+    return () => {
+      room.off("connected", enableMic);
+    };
+  }, [room, localParticipant]);
 
   const toggleMute = useCallback(async () => {
     if (localParticipant) {
