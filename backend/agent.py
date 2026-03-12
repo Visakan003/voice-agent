@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 
 import aiohttp
 from dotenv import load_dotenv
+import aiohttp.resolver as aiohttp_resolver
+import aiohttp.connector as aiohttp_connector
 
 from livekit.agents import (
     AutoSubscribe,
@@ -19,15 +21,39 @@ from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import openai, silero
 from livekit.agents.worker import JobExecutorType
 
-from pathlib import Path
+# Load environment variables
+load_dotenv()
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("voice-assistant")
+
+# Load knowledge base
 KNOWLEDGE_FILE = Path(__file__).parent / "knowledge.txt"
 KNOWLEDGE_PROMPT = KNOWLEDGE_FILE.read_text(encoding="utf-8")
 
-load_dotenv()
+# Production-safe DNS fix:
+# aiodns can fail with "Could not contact DNS servers" on some hosts/networks.
+# Force aiohttp to use the OS threaded resolver for LiveKit/OpenAI sockets.
+if os.getenv("LIVEKIT_FORCE_THREADED_DNS", "1").strip().lower() in {"1", "true", "yes"}:
+    aiohttp_resolver.DefaultResolver = aiohttp_resolver.ThreadedResolver
+    aiohttp_connector.DefaultResolver = aiohttp_resolver.ThreadedResolver
+    logger.info("Using threaded DNS resolver (LIVEKIT_FORCE_THREADED_DNS=1)")
 
-logger = logging.getLogger("voice-assistant")
-logger.setLevel(logging.INFO)
+# Force assignment URL to base LIVEKIT_URL (production-safe fallback for region routing issues).
+_ORIGINAL_HANDLE_ASSIGNMENT = livekit_worker.AgentServer._handle_assignment
+
+
+def _patched_handle_assignment(self, assignment):
+    force_base = os.getenv("LIVEKIT_FORCE_BASE_URL", "1").strip().lower() in {"1", "true", "yes"}
+    base_url = (os.getenv("LIVEKIT_URL") or "").strip()
+    assigned = getattr(assignment, "url", "") or ""
+    if force_base and base_url and assigned and assigned != base_url:
+        logger.warning("Overriding assignment URL %s -> %s", assigned, base_url)
+        assignment.url = base_url
+    return _ORIGINAL_HANDLE_ASSIGNMENT(self, assignment)
+
+
+livekit_worker.AgentServer._handle_assignment = _patched_handle_assignment
 
 # Add file handler for better debugging
 file_handler = logging.FileHandler('voice-assistant.log')

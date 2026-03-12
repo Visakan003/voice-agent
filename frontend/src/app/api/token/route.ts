@@ -4,6 +4,7 @@ import { AccessToken } from "livekit-server-sdk";
 import { NextResponse } from "next/server"; 
 
 export async function GET() {
+  const startedAt = Date.now();
   // Prefer server-only env vars (Netlify/production). Fallback to NEXT_PUBLIC_ for local dev.
   const apiKey =
     process.env.LIVEKIT_API_KEY ?? process.env.NEXT_PUBLIC_LIVEKIT_API_KEY;
@@ -49,6 +50,7 @@ export async function GET() {
     // Prevent caching so every "Start Call" gets a fresh token (avoids 401 after a few minutes)
     response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     response.headers.set("Pragma", "no-cache");
+    response.headers.set("X-Token-Gen-Ms", String(Date.now() - startedAt));
 
     return response;
   } catch (e) {
