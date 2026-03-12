@@ -428,17 +428,17 @@ async def entrypoint(ctx: JobContext):
             return "No booking details have been stored yet for this call. Collect email, phone, and country and call store_booking_details first."
         return f"Stored for this call: email {stored.get('email', '')}, phone {stored.get('phone', '')}, country {stored.get('country', '')}. Use this email when calling book_calendly_meeting."
 
-    # Create session with turn detection (normal settings)
+    # OPTIMIZATION: Create session with faster settings
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(
             model="gpt-realtime-1.5",
             voice="marin",
-            speed=0.9,
+            speed=1.0,  # Increased speed for faster response
             turn_detection=ServerVad(
                 type="server_vad",
-                threshold=0.6,
-                silence_duration_ms=200,
-                prefix_padding_ms=150,
+                threshold=0.5,  # Lower threshold for quicker detection
+                silence_duration_ms=150,  # Reduced silence duration
+                prefix_padding_ms=100,  # Reduced padding
                 create_response=True,
                 interrupt_response=True,
             ),
@@ -450,20 +450,24 @@ async def entrypoint(ctx: JobContext):
         tools=[store_booking_details, get_stored_booking_details, check_calendly_availability, _make_book_calendly_meeting_tool(room)],
     )
 
-    await session.start(agent=agent, room=ctx.room)
-
-    logger.info("Agent session started (%.2fs)", time.perf_counter() - started_at)
-
-    # Simply generate the greeting without any delays or turn detection manipulation
-    # The system will handle it naturally
+    # OPTIMIZATION: Start session and generate greeting in parallel
+    session_task = asyncio.create_task(session.start(agent=agent, room=ctx.room))
+    
+    # Wait for session to start but don't block too long
+    await asyncio.sleep(0.5)
+    
+    # Generate greeting as soon as possible
+    logger.info("Generating greeting (%.2fs)", time.perf_counter() - started_at)
     await session.generate_reply(
         instructions="Say exactly once: Hey there! I'm Zia from Atlasium. How can I help you today?"
     )
     logger.info("Initial greeting generated (%.2fs)", time.perf_counter() - started_at)
+    
+    # Make sure session is fully started
+    await session_task
 
     while True:
         await asyncio.sleep(1)
-
 if __name__ == "__main__":
 
     logger.info("Starting LiveKit voice agent worker...")

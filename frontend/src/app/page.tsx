@@ -12,16 +12,17 @@ import "@livekit/components-styles";
 
 const BOOKING_STORAGE_KEY = "zia_booking_details";
 
-function SpeakingAnimation({ state }: { state: string }) {
+function SpeakingAnimation({ state, timeElapsed }: { state: string; timeElapsed?: number }) {
   const isSpeaking = state === "speaking";
   const isListening = state === "listening";
+  const isConnecting = state === "connecting";
   const isActive = isSpeaking || isListening;
 
   return (
     <div className="flex flex-col items-center gap-6">
       {/* Animated circle */}
       <div className="relative flex items-center justify-center w-40 h-40">
-        {/* Pulse rings */}
+        {/* Pulse rings - only show when active (speaking/listening) */}
         {isActive && (
           <>
             <div
@@ -56,29 +57,49 @@ function SpeakingAnimation({ state }: { state: string }) {
               ? "#3b82f6"
               : isListening
                 ? "#22c55e"
-                : "#374151",
+                : isConnecting
+                  ? "#f59e0b" // Amber color for connecting
+                  : "#374151",
           }}
         >
-          {/* Mic icon */}
-          <svg
-            width="32"
-            height="32"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="white"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" y1="19" x2="12" y2="23" />
-            <line x1="8" y1="23" x2="16" y2="23" />
-          </svg>
+          {/* Icon - show different icon for connecting */}
+          {isConnecting ? (
+            <svg
+              width="32"
+              height="32"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="animate-spin"
+              style={{ animationDuration: '2s' }}
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 6v6l4 2" />
+            </svg>
+          ) : (
+            <svg
+              width="32"
+              height="32"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+          )}
         </div>
       </div>
 
-      {/* Sound bars */}
+      {/* Sound bars - only show when active (speaking/listening) */}
       {isActive && (
         <div className="flex items-center gap-1 h-10">
           {[...Array(5)].map((_, i) => (
@@ -88,21 +109,26 @@ function SpeakingAnimation({ state }: { state: string }) {
               style={{
                 backgroundColor: isSpeaking ? "#3b82f6" : "#22c55e",
                 height: "8px",
+                animationDelay: `${i * 0.1}s`,
               }}
             />
           ))}
         </div>
       )}
 
-      {/* Status text */}
+      {/* Status text with time for connecting */}
       <p className="text-sm text-gray-400 capitalize">
-        {state === "speaking"
-          ? "Agent is speaking..."
-          : state === "listening"
-            ? "Listening..."
-            : state === "thinking"
-              ? "Thinking..."
-              : "Connected"}
+        {isConnecting
+          ? timeElapsed 
+            ? `Connecting... (${timeElapsed}s)` 
+            : "Connecting..."
+          : isSpeaking
+            ? "Agent is speaking..."
+            : isListening
+              ? "Listening..."
+              : state === "thinking"
+                ? "Thinking..."
+                : "Connected"}
       </p>
     </div>
   );
@@ -114,13 +140,34 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const room = useRoomContext();
   const [isMuted, setIsMuted] = useState(false);
   const [initialGreetingSent, setInitialGreetingSent] = useState(false);
+  const [connectTime] = useState(Date.now());
+  const [timeElapsed, setTimeElapsed] = useState(0);
+
+  // Log timing information
+  useEffect(() => {
+    if (room?.state === "connected") {
+      console.log("[Timing] Room connected after:", Date.now() - connectTime, "ms");
+    }
+  }, [room?.state, connectTime]);
 
   // Track when the AI starts speaking for the first time
   useEffect(() => {
     if (state === "speaking" && !initialGreetingSent) {
       setInitialGreetingSent(true);
+      console.log("[Timing] AI started speaking after:", Date.now() - connectTime, "ms");
     }
-  }, [state, initialGreetingSent]);
+  }, [state, initialGreetingSent, connectTime]);
+
+  // Timer for connecting state
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (!initialGreetingSent) {
+      interval = setInterval(() => {
+        setTimeElapsed(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [initialGreetingSent]);
 
   // Clear booking data from localStorage when the call ends (disconnect for any reason)
   useEffect(() => {
@@ -193,13 +240,14 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
     };
   }, [room]);
 
-  // Enable mic only after the room is connected so the SDK has full context (avoids "publishing track { room: undefined, ... }" log).
+  // Enable mic only after the room is connected so the SDK has full context
   useEffect(() => {
     if (!room || !localParticipant) return;
 
     const enableMic = async () => {
       try {
         await localParticipant.setMicrophoneEnabled(true);
+        console.log("[Zia] Microphone enabled");
       } catch (err) {
         console.error("Failed to enable microphone:", err);
       }
@@ -220,28 +268,31 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
       const nextMuted = !isMuted;
       await localParticipant.setMicrophoneEnabled(!nextMuted);
       setIsMuted(nextMuted);
+      console.log("[Zia] Microphone", nextMuted ? "muted" : "unmuted");
     }
   }, [localParticipant, isMuted]);
 
   // Determine what state to display
-  const displayState = !initialGreetingSent && state !== "speaking" 
-    ? "connecting" // Show "Connecting..." until AI starts speaking
+  // Show "connecting" until the AI speaks for the first time
+  const displayState = !initialGreetingSent 
+    ? "connecting" 
     : state;
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-8">
       <h1 className="text-2xl font-semibold">Talk to Zia</h1>
 
-      <SpeakingAnimation state={displayState} />
+      <SpeakingAnimation state={displayState} timeElapsed={timeElapsed} />
 
       <div className="flex gap-4">
         {/* Mute / Unmute */}
         <button
           onClick={toggleMute}
-          className={`px-6 py-3 rounded-full font-medium transition-colors ${isMuted
+          className={`px-6 py-3 rounded-full font-medium transition-colors ${
+            isMuted
               ? "bg-yellow-600 hover:bg-yellow-700"
               : "bg-gray-700 hover:bg-gray-600"
-            }`}
+          }`}
         >
           {isMuted ? (
             <span className="flex items-center gap-2">
@@ -302,11 +353,22 @@ export default function Home() {
     roomName: string;
   } | null>(null);
 
-  // Pre-fetch token when component mounts
+  // Pre-fetch token when component mounts - with optimization
   useEffect(() => {
     const prefetchToken = async () => {
       try {
-        const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
+        // Use AbortController for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        
+        const response = await fetch(`/api/token?t=${Date.now()}`, { 
+          cache: "no-store",
+          signal: controller.signal,
+          priority: "high" // Request high priority
+        });
+        
+        clearTimeout(timeoutId);
+        
         if (response.ok) {
           const data = await response.json();
           if (data?.token && data?.url) {
@@ -318,8 +380,12 @@ export default function Home() {
             console.info("[voice] Token pre-fetched successfully");
           }
         }
-      } catch (error) {
-        console.error("[voice] Token pre-fetch failed:", error);
+      } catch (error: any) {
+        if (error.name === 'AbortError') {
+          console.warn("[voice] Token pre-fetch timed out");
+        } else {
+          console.error("[voice] Token pre-fetch failed:", error);
+        }
       }
     };
     
@@ -343,7 +409,11 @@ export default function Home() {
         return;
       }
       
-      const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
+      const response = await fetch(`/api/token?t=${Date.now()}`, { 
+        cache: "no-store",
+        priority: "high"
+      });
+      
       let data: { token?: string; url?: string; roomName?: string; error?: string; detail?: string } | null = null;
       try {
         data = await response.json();
@@ -386,7 +456,16 @@ export default function Home() {
     // Pre-fetch a new token for next call
     const prefetchNext = async () => {
       try {
-        const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        
+        const response = await fetch(`/api/token?t=${Date.now()}`, { 
+          cache: "no-store",
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
         if (response.ok) {
           const data = await response.json();
           if (data?.token && data?.url) {
@@ -395,10 +474,13 @@ export default function Home() {
               url: data.url, 
               roomName: data.roomName ?? "" 
             });
+            console.info("[voice] Next token pre-fetched successfully");
           }
         }
-      } catch (error) {
-        console.error("[voice] Next token pre-fetch failed:", error);
+      } catch (error: any) {
+        if (error.name !== 'AbortError') {
+          console.error("[voice] Next token pre-fetch failed:", error);
+        }
       }
     };
     prefetchNext();
@@ -431,7 +513,7 @@ export default function Home() {
       <img src="/dialzia.png" alt="Zia" className="w-24 h-24" />
       <h1 className="text-3xl font-bold">Talk to Zia</h1>
       <p className="text-gray-400 text-center max-w-md">
-      Click the button below to start a conversation with Zia,<br/> our AI voice assistant.
+        Click the button below to start a conversation with Zia,<br/> our AI voice assistant.
       </p>
 
       {/* Mic icon */}
@@ -470,5 +552,6 @@ export default function Home() {
         {isConnecting ? "Connecting..." : "Start Call"}
       </button>
     </div>
-  );
+ 
+);
 }
