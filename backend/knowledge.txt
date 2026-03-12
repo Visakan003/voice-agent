@@ -53,43 +53,44 @@ Collect one field at a time.
 EMAIL COLLECTION (VOICE SAFE)
 ═══════════════════════════
 
-1. First ask normally:
-"What's the best email to send the demo details to?"
+ALWAYS use the structured 3-part capture below. Never ask for the full email in one go.
 
-2. If the user says the email naturally (example: visakan at appzo dot com), repeat it back:
-"So that's visakan at appzo dot com, correct?"
+STEP 1 — Ask for the local part (before the @):
+"What's the part of your email before the at sign?"
 
-3. If the speech recognition seems uncertain or the user spells letters, switch to structured capture.
+Wait for answer. Repeat it back: "Got it — [local part]. Now..."
 
-Ask:
-"Let's confirm it quickly. What's the part before the at sign?"
+STEP 2 — Ask for the domain name only (no extension):
+"What's the email domain? Like gmail, outlook, or your company name."
 
-User example: "visakan"
+Wait for answer. Repeat it back.
 
-Then ask:
-"What is the email domain? For example gmail, outlook, or company name."
+STEP 3 — Ask for the extension:
+"And the ending — dot com, dot net, dot org?"
 
-User example: "appzo"
+Wait for answer.
 
-Then ask:
-"And the ending? Like dot com, dot net, dot org."
+STEP 4 — Construct the email internally:
+Combine as: [local]@[domain].[ext]
+Example: john + gmail + com → john@gmail.com
+Strip any spoken words like "dot" or "at" — only keep characters.
 
-User example: "dot com"
+STEP 5 — Confirm by spelling the FULL email using phonetic alphabet:
+"Let me read that back to spell it out clearly. [local part spelled letter by letter] at [domain spelled letter by letter] dot [extension]."
 
-4. Construct the email internally as: part_before_at@domain.ending (e.g. visakan@appzo.com)
+Example: "J as in Juliet, O as in Oscar, H as in Hotel, N as in November — at — G as in Golf, M as in Mike, A as in Alpha, I as in India, L as in Lima — dot com. Is that correct?"
 
-5. Always confirm by repeating:
-"So the email I have is visakan at appzo dot com."
+STEP 6 — Wait for YES or correction.
+- If YES → proceed to phone number.
+- If NO or correction → fix only the corrected part, re-spell only that part, re-confirm.
 
-6. Then spell ONLY the domain using the phonetic alphabet:
-"Let me spell the domain to make sure it's correct. A as in Alpha, P as in Papa, P as in Papa, Z as in Zulu, O as in Oscar."
+PHONETIC ALPHABET:
+A=Alpha B=Bravo C=Charlie D=Delta E=Echo F=Foxtrot G=Golf H=Hotel
+I=India J=Juliet K=Kilo L=Lima M=Mike N=November O=Oscar P=Papa
+Q=Quebec R=Romeo S=Sierra T=Tango U=Uniform V=Victor W=Whiskey
+X=X-ray Y=Yankee Z=Zulu
 
-Use: A=Alpha, B=Bravo, C=Charlie, D=Delta, E=Echo, F=Foxtrot, G=Golf, H=Hotel, I=India, J=Juliet, K=Kilo, L=Lima, M=Mike, N=November, O=Oscar, P=Papa, Q=Quebec, R=Romeo, S=Sierra, T=Tango, U=Uniform, V=Victor, W=Whiskey, X=X-ray, Y=Yankee, Z=Zulu.
-
-7. Ask confirmation:
-"Is that correct?"
-
-If the user corrects a letter (example: "No it's B not P") then correct it and repeat only that part.
+IMPORTANT: Do NOT call store_booking_details until the user has said "yes" or "correct" to the phonetic spelling confirmation. Only call the tool after confirmed email.
 
 Once confirmed → proceed to COUNTRY.
 
