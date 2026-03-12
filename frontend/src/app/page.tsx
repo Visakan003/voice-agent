@@ -6,8 +6,11 @@ import {
   useVoiceAssistant,
   RoomAudioRenderer,
   useLocalParticipant,
+  useRoomContext,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
+
+const BOOKING_STORAGE_KEY = "zia_booking_details";
 
 function SpeakingAnimation({ state }: { state: string }) {
   const isSpeaking = state === "speaking";
@@ -108,7 +111,79 @@ function SpeakingAnimation({ state }: { state: string }) {
 function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const { state } = useVoiceAssistant();
   const { localParticipant } = useLocalParticipant();
+  const room = useRoomContext();
   const [isMuted, setIsMuted] = useState(false);
+
+  // Clear booking data from localStorage when the call ends (disconnect for any reason)
+  useEffect(() => {
+    if (!room) return;
+    const clearBookingStorage = () => {
+      try {
+        localStorage.removeItem(BOOKING_STORAGE_KEY);
+        console.log("[Zia] Call ended: booking data cleared from localStorage.");
+      } catch {
+        // ignore
+      }
+    };
+    room.on("disconnected", clearBookingStorage);
+    return () => {
+      room.off("disconnected", clearBookingStorage);
+    };
+  }, [room]);
+
+  // Subscribe to booking_details and meeting_booked data from the agent; save to localStorage and console.log everything
+  useEffect(() => {
+    if (!room) return;
+    const handleDataReceived = (
+      payload: Uint8Array,
+      _participant?: unknown,
+      _kind?: unknown,
+      topic?: string
+    ) => {
+      try {
+        const text = new TextDecoder().decode(payload);
+        const data = JSON.parse(text) as Record<string, unknown>;
+
+        if (topic === "booking_details") {
+          if (data.type === "booking_details" && data.email != null) {
+            const booking = {
+              email: data.email ?? "",
+              phone: data.phone ?? "",
+              country: data.country ?? "",
+            };
+            localStorage.setItem(BOOKING_STORAGE_KEY, JSON.stringify(booking));
+            console.log("[Zia] Booking details received and saved:", booking);
+          }
+          return;
+        }
+
+        if (topic === "meeting_booked") {
+          const booked = data.booked === true;
+          const startTime = data.start_time as string | undefined;
+          const email = data.email as string | undefined;
+          const error = data.error as string | undefined;
+          console.log("[Zia] Meeting booking result:", {
+            booked,
+            start_time: startTime,
+            email,
+            error: error ?? null,
+            fullPayload: data,
+          });
+          if (booked) {
+            console.log("[Zia] Meeting is booked. User will receive Calendly confirmation email.");
+          } else {
+            console.warn("[Zia] Meeting was not booked.", error ? `Reason: ${error}` : "Calendly API may have failed. Check backend logs for details.");
+          }
+        }
+      } catch (e) {
+        console.error("[Zia] Failed to parse data:", topic, e);
+      }
+    };
+    room.on("dataReceived", handleDataReceived);
+    return () => {
+      room.off("dataReceived", handleDataReceived);
+    };
+  }, [room]);
 
   // Enable mic quickly on connect. Auto-greeting is disabled server-side to avoid cold-start delay.
   useEffect(() => {
@@ -230,6 +305,11 @@ export default function Home() {
   }, []);
 
   const endCall = useCallback(() => {
+    try {
+      localStorage.removeItem(BOOKING_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
     setConnectionDetails(null);
   }, []);
 
