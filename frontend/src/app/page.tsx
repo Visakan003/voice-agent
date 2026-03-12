@@ -290,19 +290,26 @@ export default function Home() {
     console.info("[voice] Start Call clicked");
     try {
       const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
-      const data = await response.json();
-      const tokenMs = Math.round(performance.now() - started);
-      const tokenHeader = response.headers.get("x-token-gen-ms");
-      console.info("[voice] Token received", { totalMs: tokenMs, tokenGenMs: tokenHeader });
-      if (!response.ok) {
-        setTokenError(data.detail ?? data.error ?? "Failed to get token");
+      let data: { token?: string; url?: string; roomName?: string; error?: string; detail?: string } | null = null;
+      try {
+        data = await response.json();
+      } catch {
+        // Server returned non-JSON (e.g. 500 HTML page)
+        setTokenError(response.ok ? "Invalid response from server." : `Server error (${response.status}). Check the terminal running the frontend for details.`);
         return;
       }
-      if (!data.token || !data.url) {
+      const tokenMs = Math.round(performance.now() - started);
+      const tokenHeader = response.headers.get("x-token-gen-ms");
+      console.info("[voice] Token received", { totalMs: tokenMs, tokenGenMs: tokenHeader, ok: response.ok });
+      if (!response.ok) {
+        setTokenError(data?.detail ?? data?.error ?? "Failed to get token");
+        return;
+      }
+      if (!data?.token || !data?.url) {
         setTokenError("Invalid token response");
         return;
       }
-      setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName });
+      setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName ?? "" });
     } catch (error) {
       console.error("Failed to get token:", error);
       setTokenError("Could not reach server. Check network and try again.");
