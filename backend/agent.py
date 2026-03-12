@@ -428,6 +428,7 @@ async def entrypoint(ctx: JobContext):
             return "No booking details have been stored yet for this call. Collect email, phone, and country and call store_booking_details first."
         return f"Stored for this call: email {stored.get('email', '')}, phone {stored.get('phone', '')}, country {stored.get('country', '')}. Use this email when calling book_calendly_meeting."
 
+    # Create session with turn detection (normal settings)
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(
             model="gpt-realtime-1.5",
@@ -453,19 +454,15 @@ async def entrypoint(ctx: JobContext):
 
     logger.info("Agent session started (%.2fs)", time.perf_counter() - started_at)
 
-    # Optional auto greeting; disable by default to avoid first-turn cold-start delay.
-    auto_greeting = os.getenv("AGENT_AUTO_GREETING", "0").strip().lower() in {"1", "true", "yes"}
-    if auto_greeting:
-        await session.generate_reply(
-            instructions="Say exactly once: Hey there! I'm Zia from Atlasium. How can I help you today?"
-        )
-        logger.info("Initial greeting generated (%.2fs)", time.perf_counter() - started_at)
-    else:
-        logger.info("Auto greeting disabled; waiting for user first turn")
+    # Simply generate the greeting without any delays or turn detection manipulation
+    # The system will handle it naturally
+    await session.generate_reply(
+        instructions="Say exactly once: Hey there! I'm Zia from Atlasium. How can I help you today?"
+    )
+    logger.info("Initial greeting generated (%.2fs)", time.perf_counter() - started_at)
 
     while True:
         await asyncio.sleep(1)
-
 
 if __name__ == "__main__":
 
