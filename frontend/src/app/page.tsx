@@ -113,6 +113,14 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const { localParticipant } = useLocalParticipant();
   const room = useRoomContext();
   const [isMuted, setIsMuted] = useState(false);
+  const [initialGreetingSent, setInitialGreetingSent] = useState(false);
+
+  // Track when the AI starts speaking for the first time
+  useEffect(() => {
+    if (state === "speaking" && !initialGreetingSent) {
+      setInitialGreetingSent(true);
+    }
+  }, [state, initialGreetingSent]);
 
   // Clear booking data from localStorage when the call ends (disconnect for any reason)
   useEffect(() => {
@@ -215,11 +223,16 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
     }
   }, [localParticipant, isMuted]);
 
+  // Determine what state to display
+  const displayState = !initialGreetingSent && state !== "speaking" 
+    ? "connecting" // Show "Connecting..." until AI starts speaking
+    : state;
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-8">
       <h1 className="text-2xl font-semibold">Talk to Zia</h1>
 
-      <SpeakingAnimation state={state} />
+      <SpeakingAnimation state={displayState} />
 
       <div className="flex gap-4">
         {/* Mute / Unmute */}
@@ -281,6 +294,37 @@ export default function Home() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [connectStartAt, setConnectStartAt] = useState<number | null>(null);
+  
+  // Pre-fetch token on component mount to save time
+  const [prefetchedToken, setPrefetchedToken] = useState<{
+    token: string;
+    url: string;
+    roomName: string;
+  } | null>(null);
+
+  // Pre-fetch token when component mounts
+  useEffect(() => {
+    const prefetchToken = async () => {
+      try {
+        const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
+        if (response.ok) {
+          const data = await response.json();
+          if (data?.token && data?.url) {
+            setPrefetchedToken({ 
+              token: data.token, 
+              url: data.url, 
+              roomName: data.roomName ?? "" 
+            });
+            console.info("[voice] Token pre-fetched successfully");
+          }
+        }
+      } catch (error) {
+        console.error("[voice] Token pre-fetch failed:", error);
+      }
+    };
+    
+    prefetchToken();
+  }, []);
 
   const startCall = useCallback(async () => {
     setTokenError(null);
@@ -288,7 +332,17 @@ export default function Home() {
     const started = performance.now();
     setConnectStartAt(started);
     console.info("[voice] Start Call clicked");
+    
     try {
+      // Use prefetched token if available, otherwise fetch new one
+      if (prefetchedToken) {
+        console.info("[voice] Using prefetched token");
+        setConnectionDetails(prefetchedToken);
+        setPrefetchedToken(null); // Clear prefetched token
+        setIsConnecting(false);
+        return;
+      }
+      
       const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
       let data: { token?: string; url?: string; roomName?: string; error?: string; detail?: string } | null = null;
       try {
@@ -296,6 +350,7 @@ export default function Home() {
       } catch {
         // Server returned non-JSON (e.g. 500 HTML page)
         setTokenError(response.ok ? "Invalid response from server." : `Server error (${response.status}). Check the terminal running the frontend for details.`);
+        setIsConnecting(false);
         return;
       }
       const tokenMs = Math.round(performance.now() - started);
@@ -303,10 +358,12 @@ export default function Home() {
       console.info("[voice] Token received", { totalMs: tokenMs, tokenGenMs: tokenHeader, ok: response.ok });
       if (!response.ok) {
         setTokenError(data?.detail ?? data?.error ?? "Failed to get token");
+        setIsConnecting(false);
         return;
       }
       if (!data?.token || !data?.url) {
         setTokenError("Invalid token response");
+        setIsConnecting(false);
         return;
       }
       setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName ?? "" });
@@ -316,7 +373,7 @@ export default function Home() {
     } finally {
       setIsConnecting(false);
     }
-  }, []);
+  }, [prefetchedToken]);
 
   const endCall = useCallback(() => {
     try {
@@ -325,6 +382,26 @@ export default function Home() {
       // ignore
     }
     setConnectionDetails(null);
+    
+    // Pre-fetch a new token for next call
+    const prefetchNext = async () => {
+      try {
+        const response = await fetch(`/api/token?t=${Date.now()}`, { cache: "no-store" });
+        if (response.ok) {
+          const data = await response.json();
+          if (data?.token && data?.url) {
+            setPrefetchedToken({ 
+              token: data.token, 
+              url: data.url, 
+              roomName: data.roomName ?? "" 
+            });
+          }
+        }
+      } catch (error) {
+        console.error("[voice] Next token pre-fetch failed:", error);
+      }
+    };
+    prefetchNext();
   }, []);
 
   if (connectionDetails) {
