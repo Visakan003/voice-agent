@@ -392,58 +392,67 @@ export default function Home() {
     prefetchToken();
   }, []);
 
-  const startCall = useCallback(async () => {
-    setTokenError(null);
-    setIsConnecting(true);
-    const started = performance.now();
-    setConnectStartAt(started);
-    console.info("[voice] Start Call clicked");
+// app/page.tsx (optimized portion)
+const startCall = useCallback(async () => {
+  setTokenError(null);
+  setIsConnecting(true);
+  const started = performance.now();
+  setConnectStartAt(started);
+  console.info("[voice] Start Call clicked");
+  
+  try {
+    // Use prefetched token if available, otherwise fetch new one
+    if (prefetchedToken) {
+      console.info("[voice] Using prefetched token");
+      setConnectionDetails(prefetchedToken);
+      setPrefetchedToken(null);
+      setIsConnecting(false);
+      return;
+    }
     
-    try {
-      // Use prefetched token if available, otherwise fetch new one
-      if (prefetchedToken) {
-        console.info("[voice] Using prefetched token");
-        setConnectionDetails(prefetchedToken);
-        setPrefetchedToken(null); // Clear prefetched token
-        setIsConnecting(false);
-        return;
-      }
-      
-      const response = await fetch(`/api/token?t=${Date.now()}`, { 
-        cache: "no-store",
-        priority: "high"
-      });
-      
-      let data: { token?: string; url?: string; roomName?: string; error?: string; detail?: string } | null = null;
-      try {
-        data = await response.json();
-      } catch {
-        // Server returned non-JSON (e.g. 500 HTML page)
-        setTokenError(response.ok ? "Invalid response from server." : `Server error (${response.status}). Check the terminal running the frontend for details.`);
-        setIsConnecting(false);
-        return;
-      }
-      const tokenMs = Math.round(performance.now() - started);
-      const tokenHeader = response.headers.get("x-token-gen-ms");
-      console.info("[voice] Token received", { totalMs: tokenMs, tokenGenMs: tokenHeader, ok: response.ok });
-      if (!response.ok) {
-        setTokenError(data?.detail ?? data?.error ?? "Failed to get token");
-        setIsConnecting(false);
-        return;
-      }
-      if (!data?.token || !data?.url) {
-        setTokenError("Invalid token response");
-        setIsConnecting(false);
-        return;
-      }
-      setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName ?? "" });
-    } catch (error) {
+    // Use AbortController for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    
+    const response = await fetch(`/api/token?t=${Date.now()}`, { 
+      cache: "no-store",
+      signal: controller.signal,
+      priority: "high",
+      // Add keepalive for connection reuse
+      keepalive: true
+    });
+    
+    clearTimeout(timeoutId);
+    
+    const data = await response.json();
+    const tokenMs = Math.round(performance.now() - started);
+    console.info("[voice] Token received", { totalMs: tokenMs, ok: response.ok });
+    
+    if (!response.ok) {
+      setTokenError(data?.detail ?? data?.error ?? "Failed to get token");
+      setIsConnecting(false);
+      return;
+    }
+    
+    if (!data?.token || !data?.url) {
+      setTokenError("Invalid token response");
+      setIsConnecting(false);
+      return;
+    }
+    
+    setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName ?? "" });
+  } catch (error: unknown) {
+    const isAbort = error instanceof Error && error.name === 'AbortError';
+    if (isAbort) {
+      setTokenError("Request timed out. Please try again.");
+    } else {
       console.error("Failed to get token:", error);
       setTokenError("Could not reach server. Check network and try again.");
-    } finally {
-      setIsConnecting(false);
     }
-  }, [prefetchedToken]);
+  } finally {
+    setIsConnecting(false);
+  }
+}, [prefetchedToken]);
 
   const endCall = useCallback(() => {
     try {

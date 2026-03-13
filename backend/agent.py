@@ -24,24 +24,21 @@ from livekit.agents import (
     function_tool,
 )
 from livekit.agents import worker as livekit_worker
-
 from livekit.agents.worker import JobExecutorType
 from livekit.plugins import openai
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-# Topic for booking details data messages (frontend subscribes and saves to localStorage)
+# Topic for booking details data messages
 BOOKING_DATA_TOPIC = "booking_details"
 
-# Per-room storage so the agent can use stored booking details in the conversation (e.g. when booking Calendly)
+# Per-room storage
 _room_booking_store: dict[str, dict[str, str]] = {}
 
-# Email format validation before storing (voice capture can produce malformed strings)
-# Must match something@something.something (literal dot in domain)
+# Email format validation
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# Calendly API (optional): set CALENDLY_ACCESS_TOKEN and either CALENDLY_EVENT_TYPE_URI or CALENDLY_SCHEDULING_LINK in .env
+# Calendly API
 CALENDLY_API_BASE = "https://api.calendly.com"
-# Resolved event type URI when using CALENDLY_SCHEDULING_LINK (cached per process)
 _calendly_event_type_uri_cache: str | None = None
 
 # Load environment variables
@@ -54,15 +51,13 @@ logger = logging.getLogger("voice-assistant")
 KNOWLEDGE_FILE = Path(__file__).parent / "knowledge.txt"
 KNOWLEDGE_PROMPT = KNOWLEDGE_FILE.read_text(encoding="utf-8")
 
-# Production-safe DNS fix:
-# aiodns can fail with "Could not contact DNS servers" on some hosts/networks.
-# Force aiohttp to use the OS threaded resolver for LiveKit/OpenAI sockets.
+# Force threaded DNS resolver to avoid aiodns issues
 if os.getenv("LIVEKIT_FORCE_THREADED_DNS", "1").strip().lower() in {"1", "true", "yes"}:
     aiohttp_resolver.DefaultResolver = aiohttp_resolver.ThreadedResolver
     aiohttp_connector.DefaultResolver = aiohttp_resolver.ThreadedResolver
-    logger.info("Using threaded DNS resolver (LIVEKIT_FORCE_THREADED_DNS=1)")
+    logger.info("Using threaded DNS resolver")
 
-# Force assignment URL to base LIVEKIT_URL (production-safe fallback for region routing issues).
+# Patch assignment URL
 _ORIGINAL_HANDLE_ASSIGNMENT = livekit_worker.AgentServer._handle_assignment
 
 
@@ -80,7 +75,7 @@ livekit_worker.AgentServer._handle_assignment = _patched_handle_assignment
 
 
 async def _resolve_calendly_event_type_uri(token: str) -> str | None:
-    """Resolve event type URI from CALENDLY_EVENT_TYPE_URI or by looking up CALENDLY_SCHEDULING_LINK (e.g. https://calendly.com/username/event-slug)."""
+    """Resolve event type URI from env or scheduling link."""
     global _calendly_event_type_uri_cache
     if _calendly_event_type_uri_cache:
         return _calendly_event_type_uri_cache
@@ -91,7 +86,6 @@ async def _resolve_calendly_event_type_uri(token: str) -> str | None:
     scheduling_link = (os.getenv("CALENDLY_SCHEDULING_LINK") or "").strip()
     if not scheduling_link or "calendly.com/" not in scheduling_link:
         return event_type_uri or None
-    # Parse slug from URL: https://calendly.com/username/event-slug -> event-slug
     slug = scheduling_link.rstrip("/").split("/")[-1] if "/" in scheduling_link else ""
     if not slug:
         return event_type_uri or None
@@ -122,12 +116,12 @@ async def _resolve_calendly_event_type_uri(token: str) -> str | None:
                         _calendly_event_type_uri_cache = uri
                         return uri
     except Exception as e:
-        logger.warning("Calendly resolve event type from link failed: %s", e)
+        logger.warning("Calendly resolve failed: %s", e)
     return event_type_uri or None
 
 
 def _normalize_calendly_location_kind_from_env(raw: str) -> str:
-    """Map env value to kind. Only for CALENDLY_LOCATION_KIND. Common kinds: custom, custom_link, zoom_conference, google_meet."""
+    """Map env value to kind."""
     if not raw:
         return raw
     k = raw.strip().lower()
@@ -143,14 +137,13 @@ def _normalize_calendly_location_kind_from_env(raw: str) -> str:
         return "phone_call"
     if "person" in k:
         return "in_person"
-    # "Custom conferencing link" in Calendly UI is often custom_link in API
     if "custom" in k or "link" in k or "conference" in k:
         return "custom_link"
     return k
 
 
 async def _get_calendly_location_kinds_for_event(token: str, event_type_uri: str) -> list[str]:
-    """GET event type and return all configured location kinds (order preserved). Use exact values from API for POST /invitees."""
+    """Get location kinds from event type."""
     if not event_type_uri or not token:
         return []
     try:
@@ -160,25 +153,17 @@ async def _get_calendly_location_kinds_for_event(token: str, event_type_uri: str
                 headers={"Authorization": f"Bearer {token}"},
             ) as resp:
                 if resp.status != 200:
-                    body_preview = (await resp.text())[:500]
-                    logger.warning(
-                        "Calendly GET event type returned %s: %s. Set CALENDLY_LOCATION_KIND to fix booking (e.g. custom_link, zoom_conference).",
-                        resp.status,
-                        body_preview,
-                    )
                     return []
                 data = await resp.json()
         resource = data.get("resource") or data
         locations = resource.get("locations") or []
         if not locations and "location" in resource:
             locations = [resource["location"]]
-        logger.info("Calendly event type locations (raw): %s", locations)
         kinds: list[str] = []
         for loc in locations:
             if not isinstance(loc, dict):
                 kind = str(loc).strip() if loc else ""
             else:
-                # API may use "kind", "type", or nested "location"; use as-is so we send what Calendly expects
                 kind = (
                     loc.get("kind")
                     or loc.get("type")
@@ -187,27 +172,18 @@ async def _get_calendly_location_kinds_for_event(token: str, event_type_uri: str
                 ).strip()
             if kind and kind not in kinds:
                 kinds.append(kind)
-        if kinds:
-            logger.info("Calendly location kinds from API: %s", kinds)
-        else:
-            logger.warning(
-                "Calendly event type has no locations or could not parse them. Set CALENDLY_LOCATION_KIND (e.g. custom_link, zoom_conference)."
-            )
         return kinds
-    except Exception as e:
-        logger.warning("Calendly get event type location failed: %s. Set CALENDLY_LOCATION_KIND to fix booking.", e)
+    except Exception:
         return []
 
 
 async def _fetch_calendly_availability(days_ahead: int = 7) -> list[dict]:
-    """Fetch available time slots from Calendly API. Returns list of {start, end} in ISO format."""
+    """Fetch available time slots from Calendly."""
     token = (os.getenv("CALENDLY_ACCESS_TOKEN") or "").strip()
     if not token:
-        logger.warning("Calendly not configured: set CALENDLY_ACCESS_TOKEN")
         return []
     event_type_uri = await _resolve_calendly_event_type_uri(token)
     if not event_type_uri:
-        logger.warning("Calendly: set CALENDLY_EVENT_TYPE_URI or CALENDLY_SCHEDULING_LINK (e.g. https://calendly.com/you/event-slug)")
         return []
     now = datetime.now(timezone.utc)
     start_time = now
@@ -222,35 +198,30 @@ async def _fetch_calendly_availability(days_ahead: int = 7) -> list[dict]:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
                 if resp.status != 200:
-                    text = await resp.text()
-                    logger.warning("Calendly API error %s: %s", resp.status, text[:200])
                     return []
                 data = await resp.json()
-    except Exception as e:
-        logger.exception("Calendly request failed: %s", e)
+        collection = data.get("collection") or data.get("items") or []
+        slots = []
+        for s in collection:
+            r = s.get("resource") or s
+            start = r.get("start_time")
+            if start:
+                slots.append({"start": start, "end": r.get("end_time")})
+        return slots
+    except Exception:
         return []
-    # Response shape: { "collection": [ { "start_time": "...", "end_time": "..." } ] } or nested under "resource"
-    collection = data.get("collection") or data.get("items") or []
-    slots = []
-    for s in collection:
-        r = s.get("resource") or s
-        start = r.get("start_time")
-        if start:
-            slots.append({"start": start, "end": r.get("end_time")})
-    return slots
 
 
 @function_tool(
-    description="Check calendar availability for the next few days. Call this after the user's booking details are stored, to offer them available time slots for the walkthrough. Returns a list of available start times you can read out to the user. Each time includes its ISO value in parentheses — when the user picks a time, use that exact ISO value in book_calendly_meeting."
+    description="Check calendar availability for the next few days."
 )
 async def check_calendly_availability(days_ahead: int = 7) -> str:
-    """Fetch Calendly availability and return a short summary for the agent to speak."""
+    """Fetch Calendly availability and return summary."""
     slots = await _fetch_calendly_availability(days_ahead=days_ahead)
     if not slots:
-        return "No availability could be loaded. You can ask the user to visit the booking link or try again later."
-    # Format: human-readable time plus ISO in parentheses so agent can pass to book_calendly_meeting
+        return "No availability could be loaded. Ask user to visit booking link."
     lines = []
-    for s in slots[:20]:  # cap at 20 slots
+    for s in slots[:20]:
         start = s.get("start")
         if not start:
             continue
@@ -262,32 +233,26 @@ async def check_calendly_availability(days_ahead: int = 7) -> str:
             lines.append(start)
     if not lines:
         return "No availability could be loaded."
-    return "Available times: " + "; ".join(lines) + ". Offer these options to the user. When they choose one, call book_calendly_meeting with their email and the chosen start_time (use the ISO value in parentheses)."
+    return "Available times: " + "; ".join(lines) + ". Offer these to user."
 
 
 async def _create_calendly_invitee(email: str, start_time_iso: str, invitee_timezone: str = "UTC") -> tuple[dict | None, str]:
-    """Create a Calendly invitee (book the meeting). Returns (result, error_message). Calendly will send the confirmation email. Uses 'Guest' as invitee name."""
+    """Create Calendly invitee."""
     token = (os.getenv("CALENDLY_ACCESS_TOKEN") or "").strip()
     if not token:
-        logger.warning("Calendly create invitee skipped: CALENDLY_ACCESS_TOKEN not set")
-        return None, "Calendly is not configured (missing token)."
+        return None, "Calendly not configured."
     event_type_uri = await _resolve_calendly_event_type_uri(token)
     if not event_type_uri:
-        logger.warning("Calendly create invitee skipped: could not resolve event type (set CALENDLY_EVENT_TYPE_URI or CALENDLY_SCHEDULING_LINK)")
-        return None, "Calendly event type could not be resolved."
-    # Prefer env when set: reliable override so booking works even if GET event type fails or returns unexpected shape
+        return None, "Calendly event type not resolved."
     raw_env = (os.getenv("CALENDLY_LOCATION_KIND") or "").strip() or None
     if raw_env:
         location_kinds_to_try = [_normalize_calendly_location_kind_from_env(raw_env)]
-        logger.info("Calendly using location kind from CALENDLY_LOCATION_KIND: %r", location_kinds_to_try[0])
     else:
         location_kinds_to_try = await _get_calendly_location_kinds_for_event(token, event_type_uri)
         if not location_kinds_to_try:
             location_kinds_to_try = [_normalize_calendly_location_kind_from_env(raw_env)] if raw_env else []
         if not location_kinds_to_try:
-            logger.warning("Calendly create invitee skipped: event type has no locations and CALENDLY_LOCATION_KIND not set")
-            return None, "This event type has no location configured; set CALENDLY_LOCATION_KIND (e.g. custom_link, zoom_conference) to match your event type."
-    # Normalize start_time to ISO with Z
+            return None, "No location configured."
     start_time_iso = start_time_iso.strip().replace("+00:00", "Z")
     if not start_time_iso.endswith("Z"):
         start_time_iso = start_time_iso + "Z"
@@ -295,18 +260,17 @@ async def _create_calendly_invitee(email: str, start_time_iso: str, invitee_time
     last_err_msg = ""
     for location_kind in location_kinds_to_try:
         payload = {
-    "event_type": event_type_uri,
-    "start_time": start_time_iso,
-    "invitee": {
-        "email": email.strip(),
-        "name": "Guest",
-        "timezone": invitee_timezone,
-    },
-    "location": {
-        "kind": location_kind
-    }
-}
-        logger.info("Calendly create invitee request location.kind=%r", location_kind)
+            "event_type": event_type_uri,
+            "start_time": start_time_iso,
+            "invitee": {
+                "email": email.strip(),
+                "name": "Guest",
+                "timezone": invitee_timezone,
+            },
+            "location": {
+                "kind": location_kind
+            }
+        }
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -323,40 +287,29 @@ async def _create_calendly_invitee(email: str, start_time_iso: str, invitee_time
                         err_msg = data.get("message") or data.get("error") or body
                     except Exception:
                         pass
-                    last_err_msg = f"Calendly API returned {resp.status}: {err_msg}"
-                    logger.warning(
-                        "Calendly create invitee failed: status=%s body=%s request_start_time=%s event_type=%s",
-                        resp.status,
-                        body,
-                        start_time_iso,
-                        event_type_uri,
-                    )
-                    # If 400 and error is about location kind, try next location
-                    if resp.status == 400 and (
-                        "location" in (err_msg or "").lower() or "invalid_location" in (err_msg or "").lower()
-                    ):
+                    last_err_msg = f"Calendly API returned {resp.status}"
+                    if resp.status == 400 and ("location" in (err_msg or "").lower() or "invalid_location" in (err_msg or "").lower()):
                         continue
                     return None, last_err_msg
         except Exception as e:
-            logger.exception("Calendly create invitee failed: %s", e)
             last_err_msg = str(e)
-    return None, last_err_msg or "Booking could not be completed."
+    return None, last_err_msg
 
 
 def _make_book_calendly_meeting_tool(room):
-    """Factory so the tool can publish meeting_booked to the room and use per-room stored email."""
+    """Factory for booking tool."""
 
     @function_tool(
-        description="Book the meeting in Calendly for the chosen time. Call this when the user has picked one of the available times. Use the exact start_time ISO string (e.g. 2026-03-14T14:00:00Z) from the availability list. Pass the user's email, or leave email empty to use the email stored for this call (from store_booking_details). Calendly will send them a confirmation email."
+        description="Book meeting in Calendly for chosen time."
     )
     async def book_calendly_meeting(start_time: str, email: str = "") -> str:
-        """Create Calendly invitee so the user gets a real confirmation email."""
+        """Create Calendly invitee."""
         if not email or not email.strip():
             stored = _room_booking_store.get(room.name)
             if stored and stored.get("email"):
                 email = stored["email"]
             else:
-                return "No email was stored for this call. Ask the user for their email again, then call store_booking_details, then book the meeting."
+                return "No email stored. Ask user for email again."
         result, error_message = await _create_calendly_invitee(email, start_time)
         payload = json.dumps({
             "type": "meeting_booked",
@@ -371,14 +324,17 @@ def _make_book_calendly_meeting_tool(room):
             reliable=True,
         )
         if result:
-            logger.info("Calendly meeting booked for %s at %s", email, start_time)
-            return "The meeting is booked. Tell the user they will receive a confirmation email from Calendly shortly with the calendar invite and meeting link."
-        return f"Booking could not be completed: {error_message}. Ask the user to try again or use the booking link on the website."
+            return "Meeting booked. User will receive confirmation email."
+        return f"Booking failed: {error_message}"
 
     return book_calendly_meeting
 
 
 def prewarm(proc: JobProcess):
+    """Simple prewarm - NO ASYNC OPERATIONS."""
+    logger.info("Worker prewarm started")
+    # Store knowledge in userdata
+    proc.userdata["knowledge"] = KNOWLEDGE_PROMPT
     logger.info("Worker prewarm complete")
 
 
@@ -386,23 +342,22 @@ async def entrypoint(ctx: JobContext):
     started_at = time.perf_counter()
 
     logger.info("Connecting to LiveKit room...")
-    logger.info("Job room URL: %s", ctx._info.url)
-
+    
+    # Connect immediately with minimal options
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
-    logger.info("Connected to room: %s (%.2fs)", ctx.room.name, time.perf_counter() - started_at)
+    logger.info("Connected to room (%.2fs)", time.perf_counter() - started_at)
 
     room = ctx.room
 
+    # Define tools
     @function_tool(
-        description="Call this ONLY after you have collected and confirmed the user's email, phone number, and country. Saves the booking details (email, phone, country only — no name) so the website and the agent can use them for the rest of the call. Do not call until all three fields are validated and confirmed."
+        description="Save booking details after collecting email, phone, country."
     )
     async def store_booking_details(email: str, phone: str, country: str) -> str:
         email = (email or "").strip()
-        logger.info("Captured email from voice agent: %s", email)
-        if not email or "@" not in email or "." not in email or not EMAIL_REGEX.match(email):
-            logger.warning("Email validation failed for: %s", email)
-            return "The email format looks incorrect. Ask the user to repeat their email slowly."
+        if not email or not EMAIL_REGEX.match(email):
+            return "Email format incorrect. Ask user to repeat."
         payload = json.dumps({
             "type": "booking_details",
             "email": email,
@@ -415,30 +370,28 @@ async def entrypoint(ctx: JobContext):
             reliable=True,
         )
         _room_booking_store[room.name] = {"email": email, "phone": phone, "country": country}
-        logger.info("Published booking_details to room: email=%s (stored for conversation)", email)
-        return "Booking details have been saved. You can use get_stored_booking_details to recall them anytime this call, and when booking Calendly you can use the stored email. Thank the user and confirm their walkthrough request has been recorded."
+        return "Booking details saved."
 
     @function_tool(
-        description="Get the booking details (email, phone, country) that were stored for this call. Call this when you need to recall the user's email, phone, or country — e.g. before offering times, when booking the meeting, or to confirm what you have on file."
+        description="Get stored booking details."
     )
     async def get_stored_booking_details() -> str:
-        """Return stored email, phone, country for the current room so the agent can use them in the conversation."""
         stored = _room_booking_store.get(room.name)
         if not stored:
-            return "No booking details have been stored yet for this call. Collect email, phone, and country and call store_booking_details first."
-        return f"Stored for this call: email {stored.get('email', '')}, phone {stored.get('phone', '')}, country {stored.get('country', '')}. Use this email when calling book_calendly_meeting."
+            return "No details stored yet."
+        return f"Stored: email {stored.get('email', '')}, phone {stored.get('phone', '')}, country {stored.get('country', '')}"
 
-    # OPTIMIZATION: Create session with faster settings
+    # Create session with optimized settings
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(
             model="gpt-realtime-1.5",
             voice="marin",
-            speed=1.0,  # Increased speed for faster response
+            speed=1.0,
             turn_detection=ServerVad(
                 type="server_vad",
-                threshold=0.5,  # Lower threshold for quicker detection
-                silence_duration_ms=150,  # Reduced silence duration
-                prefix_padding_ms=100,  # Reduced padding
+                threshold=0.5,
+                silence_duration_ms=150,
+                prefix_padding_ms=100,
                 create_response=True,
                 interrupt_response=True,
             ),
@@ -450,33 +403,31 @@ async def entrypoint(ctx: JobContext):
         tools=[store_booking_details, get_stored_booking_details, check_calendly_availability, _make_book_calendly_meeting_tool(room)],
     )
 
-    # OPTIMIZATION: Start session and generate greeting in parallel
-    session_task = asyncio.create_task(session.start(agent=agent, room=ctx.room))
+    # Start session and generate greeting
+    logger.info("Starting agent session...")
+    await session.start(agent=agent, room=ctx.room)
     
-    # Wait for session to start but don't block too long
-    await asyncio.sleep(0.5)
-    
-    # Generate greeting as soon as possible
-    logger.info("Generating greeting (%.2fs)", time.perf_counter() - started_at)
+    logger.info("Generating greeting...")
     await session.generate_reply(
         instructions="Say exactly once: Hey there! I'm Zia from Atlasium. How can I help you today?"
     )
-    logger.info("Initial greeting generated (%.2fs)", time.perf_counter() - started_at)
     
-    # Make sure session is fully started
-    await session_task
+    logger.info("Ready (total time: %.2fs)", time.perf_counter() - started_at)
 
+    # Keep alive
     while True:
         await asyncio.sleep(1)
+
+
 if __name__ == "__main__":
-
     logger.info("Starting LiveKit voice agent worker...")
-
+    
+    # CRITICAL FIX: Reduce idle processes to 1 to avoid initialization loops
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
             job_executor_type=JobExecutorType.PROCESS,
-            num_idle_processes=1,
+            num_idle_processes=1,  # Start with 1 to avoid initialization failures
         ),
     )
