@@ -498,20 +498,30 @@ const startCall = useCallback(async () => {
   if (connectionDetails) {
     return (
       <LiveKitRoom
-        key={connectionDetails.token}
-        token={connectionDetails.token}
-        serverUrl={connectionDetails.url}
-        connect={true}
-        audio={true}
-        onConnected={() => {
-          const total = connectStartAt ? Math.round(performance.now() - connectStartAt) : null;
-          console.info("[voice] LiveKit connected", { totalMsSinceClick: total });
-        }}
-        onError={(err) => {
-          console.error("[voice] LiveKit connection error", err);
-        }}
-        onDisconnected={endCall}
-      >
+  key={connectionDetails.token}
+  token={connectionDetails.token}
+  serverUrl={connectionDetails.url}
+  connect={true}
+  audio={true}
+  // Add connectOptions for faster connection
+  connectOptions={{
+    autoSubscribe: true,
+    maxRetries: 2,
+  }}
+  onConnected={() => {
+    const total = connectStartAt ? Math.round(performance.now() - connectStartAt) : null;
+    console.info("[voice] LiveKit connected", { totalMsSinceClick: total });
+    
+    // Force audio context to start immediately
+    if (typeof window !== 'undefined') {
+      // This helps with browser autoplay policies
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+    }
+  }}
+>
         <VoiceAssistantUI onDisconnect={endCall} />
       </LiveKitRoom>
     );
