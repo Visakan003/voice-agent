@@ -22,10 +22,11 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
+    llm
 )
 from livekit.agents import worker as livekit_worker
 from livekit.agents.worker import JobExecutorType
-from livekit.plugins import openai
+from livekit.plugins import openai, silero
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 # Topic for booking details data messages
@@ -55,23 +56,6 @@ if os.getenv("LIVEKIT_FORCE_THREADED_DNS", "1").strip().lower() in {"1", "true",
     aiohttp_resolver.DefaultResolver = aiohttp_resolver.ThreadedResolver
     aiohttp_connector.DefaultResolver = aiohttp_resolver.ThreadedResolver
     logger.info("Using threaded DNS resolver")
-
-# Patch assignment URL
-_ORIGINAL_HANDLE_ASSIGNMENT = livekit_worker.AgentServer._handle_assignment
-
-
-def _patched_handle_assignment(self, assignment):
-    force_base = os.getenv("LIVEKIT_FORCE_BASE_URL", "1").strip().lower() in {"1", "true", "yes"}
-    base_url = (os.getenv("LIVEKIT_URL") or "").strip()
-    assigned = getattr(assignment, "url", "") or ""
-    if force_base and base_url and assigned and assigned != base_url:
-        logger.warning("Overriding assignment URL %s -> %s", assigned, base_url)
-        assignment.url = base_url
-    return _ORIGINAL_HANDLE_ASSIGNMENT(self, assignment)
-
-
-livekit_worker.AgentServer._handle_assignment = _patched_handle_assignment
-
 
 # Cache Calendly config at module level
 CALENDLY_TOKEN = (os.getenv("CALENDLY_ACCESS_TOKEN") or "").strip()
@@ -268,16 +252,21 @@ async def entrypoint(ctx: JobContext):
             return "No details stored yet."
         return f"Stored: email {stored['email']}"
     
-    # CRITICAL CHANGE: Create session with minimal config and don't wait for full initialization
+    # IMPORTANT FIX: Create VAD and proper session configuration
+    vad = silero.VAD.load()
+    
+    # Create session with proper configuration for listening
     session = AgentSession(
+        vad=vad,  # Add VAD for listening
         llm=openai.realtime.RealtimeModel(
-            model="gpt-realtime-1.5",
-            voice="marin",
+            model="gpt-4o-realtime-preview-2024-12-17",  # Use correct model name
+            voice="alloy",
+            temperature=0.8,
             turn_detection=ServerVad(
                 type="server_vad",
                 threshold=0.5,
-                silence_duration_ms=100,
-                prefix_padding_ms=50,
+                silence_duration_ms=500,  # Increased for better listening
+                prefix_padding_ms=300,
             ),
         ),
     )
@@ -292,37 +281,33 @@ async def entrypoint(ctx: JobContext):
         ],
     )
     
-    # Start session in background - DON'T AWAIT IT
-    session_task = asyncio.create_task(session.start(agent=agent, room=ctx.room))
+    # FIX: Wait for session to be fully ready
+    logger.info("Starting session...")
+    await session.start(agent=agent, room=room)
+    logger.info(f"Session started in {time.perf_counter() - start_time:.2f}s")
     
-    # IMMEDIATELY send greeting without waiting for session
-    # Use a direct approach - create a temporary connection just for greeting
+    # Send greeting after session is ready
     try:
-        # Wait just a tiny bit for basic connection
-        await asyncio.sleep(0.2)
-        
-        # Send greeting immediately
         await session.generate_reply(
             instructions="Say: Hey there! I'm Zia from Atlasium. How can I help you today?"
         )
         logger.info(f"Greeting sent in {time.perf_counter() - start_time:.2f}s")
     except Exception as e:
-        logger.warning(f"Early greeting failed, will retry: {e}")
-        # If greeting fails, wait a bit and retry
-        await asyncio.sleep(0.5)
+        logger.error(f"Failed to send greeting: {e}")
+        # Retry once
         try:
+            await asyncio.sleep(0.5)
             await session.generate_reply(
                 instructions="Say: Hi! I'm Zia. How can I help you today?"
             )
-        except Exception:
-            logger.error("Failed to send greeting")
+        except Exception as e2:
+            logger.error(f"Retry failed: {e2}")
     
-    # Wait for session to be fully ready in background
-    asyncio.create_task(session_task)
-    
-    # Keep alive
+    # Keep alive and monitor
     while True:
         await asyncio.sleep(1)
+        # Optional: Add health check logging
+        # logger.debug("Agent is active")
 
 
 if __name__ == "__main__":

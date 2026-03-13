@@ -502,7 +502,11 @@ const startCall = useCallback(async () => {
   token={connectionDetails.token}
   serverUrl={connectionDetails.url}
   connect={true}
-  audio={true}
+  audio={{
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  }}
   // Add connectOptions for faster connection
   connectOptions={{
     autoSubscribe: true,
@@ -521,9 +525,12 @@ const startCall = useCallback(async () => {
       }
     }
   }}
+  onError={(error) => {
+    console.error("LiveKit room error:", error);
+  }}
 >
-        <VoiceAssistantUI onDisconnect={endCall} />
-      </LiveKitRoom>
+  <VoiceAssistantUI onDisconnect={endCall} />
+</LiveKitRoom>
     );
   }
 
