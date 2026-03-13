@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   LiveKitRoom,
   useVoiceAssistant,
@@ -20,9 +20,7 @@ function SpeakingAnimation({ state, timeElapsed }: { state: string; timeElapsed?
 
   return (
     <div className="flex flex-col items-center gap-6">
-      {/* Animated circle */}
       <div className="relative flex items-center justify-center w-40 h-40">
-        {/* Pulse rings - only show when active (speaking/listening) */}
         {isActive && (
           <>
             <div
@@ -49,7 +47,6 @@ function SpeakingAnimation({ state, timeElapsed }: { state: string; timeElapsed?
           </>
         )}
 
-        {/* Center circle */}
         <div
           className="relative z-10 w-20 h-20 rounded-full flex items-center justify-center transition-colors duration-300"
           style={{
@@ -58,11 +55,10 @@ function SpeakingAnimation({ state, timeElapsed }: { state: string; timeElapsed?
               : isListening
                 ? "#22c55e"
                 : isConnecting
-                  ? "#f59e0b" // Amber color for connecting
+                  ? "#f59e0b"
                   : "#374151",
           }}
         >
-          {/* Icon - show different icon for connecting */}
           {isConnecting ? (
             <svg
               width="32"
@@ -99,7 +95,6 @@ function SpeakingAnimation({ state, timeElapsed }: { state: string; timeElapsed?
         </div>
       </div>
 
-      {/* Sound bars - only show when active (speaking/listening) */}
       {isActive && (
         <div className="flex items-center gap-1 h-10">
           {[...Array(5)].map((_, i) => (
@@ -116,7 +111,6 @@ function SpeakingAnimation({ state, timeElapsed }: { state: string; timeElapsed?
         </div>
       )}
 
-      {/* Status text with time for connecting */}
       <p className="text-sm text-gray-400 capitalize">
         {isConnecting
           ? timeElapsed 
@@ -142,15 +136,14 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const [initialGreetingSent, setInitialGreetingSent] = useState(false);
   const [connectTime] = useState(Date.now());
   const [timeElapsed, setTimeElapsed] = useState(0);
+  const micEnabledRef = useRef(false);
 
-  // Log timing information
   useEffect(() => {
     if (room?.state === "connected") {
       console.log("[Timing] Room connected after:", Date.now() - connectTime, "ms");
     }
   }, [room?.state, connectTime]);
 
-  // Track when the AI starts speaking for the first time
   useEffect(() => {
     if (state === "speaking" && !initialGreetingSent) {
       setInitialGreetingSent(true);
@@ -158,7 +151,6 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
     }
   }, [state, initialGreetingSent, connectTime]);
 
-  // Timer for connecting state
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (!initialGreetingSent) {
@@ -169,9 +161,9 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
     return () => clearInterval(interval);
   }, [initialGreetingSent]);
 
-  // Clear booking data from localStorage when the call ends (disconnect for any reason)
   useEffect(() => {
     if (!room) return;
+    
     const clearBookingStorage = () => {
       try {
         localStorage.removeItem(BOOKING_STORAGE_KEY);
@@ -180,15 +172,16 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
         // ignore
       }
     };
+    
     room.on("disconnected", clearBookingStorage);
     return () => {
       room.off("disconnected", clearBookingStorage);
     };
   }, [room]);
 
-  // Subscribe to booking_details and meeting_booked data from the agent; save to localStorage and console.log everything
   useEffect(() => {
     if (!room) return;
+    
     const handleDataReceived = (
       payload: Uint8Array,
       _participant?: unknown,
@@ -222,31 +215,27 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
             start_time: startTime,
             email,
             error: error ?? null,
-            fullPayload: data,
           });
-          if (booked) {
-            console.log("[Zia] Meeting is booked. User will receive Calendly confirmation email.");
-          } else {
-            console.warn("[Zia] Meeting was not booked.", error ? `Reason: ${error}` : "Calendly API may have failed. Check backend logs for details.");
-          }
         }
       } catch (e) {
         console.error("[Zia] Failed to parse data:", topic, e);
       }
     };
+    
     room.on("dataReceived", handleDataReceived);
     return () => {
       room.off("dataReceived", handleDataReceived);
     };
   }, [room]);
 
-  // Enable mic only after the room is connected so the SDK has full context
+  // Enable mic immediately when room connects
   useEffect(() => {
-    if (!room || !localParticipant) return;
+    if (!room || !localParticipant || micEnabledRef.current) return;
 
     const enableMic = async () => {
       try {
         await localParticipant.setMicrophoneEnabled(true);
+        micEnabledRef.current = true;
         console.log("[Zia] Microphone enabled");
       } catch (err) {
         console.error("Failed to enable microphone:", err);
@@ -255,12 +244,9 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
 
     if (room.state === "connected") {
       enableMic();
-      return;
+    } else {
+      room.once("connected", enableMic);
     }
-    room.on("connected", enableMic);
-    return () => {
-      room.off("connected", enableMic);
-    };
   }, [room, localParticipant]);
 
   const toggleMute = useCallback(async () => {
@@ -272,11 +258,7 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
     }
   }, [localParticipant, isMuted]);
 
-  // Determine what state to display
-  // Show "connecting" until the AI speaks for the first time
-  const displayState = !initialGreetingSent 
-    ? "connecting" 
-    : state;
+  const displayState = !initialGreetingSent ? "connecting" : state;
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen gap-8">
@@ -285,7 +267,6 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
       <SpeakingAnimation state={displayState} timeElapsed={timeElapsed} />
 
       <div className="flex gap-4">
-        {/* Mute / Unmute */}
         <button
           onClick={toggleMute}
           className={`px-6 py-3 rounded-full font-medium transition-colors ${
@@ -318,7 +299,6 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
           )}
         </button>
 
-        {/* End Call */}
         <button
           onClick={onDisconnect}
           className="px-6 py-3 rounded-full font-medium bg-red-600 hover:bg-red-700 transition-colors flex items-center gap-2"
@@ -345,26 +325,23 @@ export default function Home() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [connectStartAt, setConnectStartAt] = useState<number | null>(null);
-  
-  // Pre-fetch token on component mount to save time
   const [prefetchedToken, setPrefetchedToken] = useState<{
     token: string;
     url: string;
     roomName: string;
   } | null>(null);
+  const [audioInitialized, setAudioInitialized] = useState(false);
 
-  // Pre-fetch token when component mounts - with optimization
+  // Pre-fetch token immediately
   useEffect(() => {
     const prefetchToken = async () => {
       try {
-        // Use AbortController for timeout
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
         
         const response = await fetch(`/api/token?t=${Date.now()}`, { 
           cache: "no-store",
           signal: controller.signal,
-          priority: "high" // Request high priority
         });
         
         clearTimeout(timeoutId);
@@ -381,9 +358,7 @@ export default function Home() {
           }
         }
       } catch (error: any) {
-        if (error.name === 'AbortError') {
-          console.warn("[voice] Token pre-fetch timed out");
-        } else {
+        if (error.name !== 'AbortError') {
           console.error("[voice] Token pre-fetch failed:", error);
         }
       }
@@ -392,67 +367,86 @@ export default function Home() {
     prefetchToken();
   }, []);
 
-// app/page.tsx (optimized portion)
-const startCall = useCallback(async () => {
-  setTokenError(null);
-  setIsConnecting(true);
-  const started = performance.now();
-  setConnectStartAt(started);
-  console.info("[voice] Start Call clicked");
-  
-  try {
-    // Use prefetched token if available, otherwise fetch new one
-    if (prefetchedToken) {
-      console.info("[voice] Using prefetched token");
-      setConnectionDetails(prefetchedToken);
-      setPrefetchedToken(null);
+  // Initialize audio context on user interaction
+  const initAudio = useCallback(() => {
+    if (audioInitialized) return;
+    
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        const audioContext = new AudioContextClass();
+        if (audioContext.state === 'suspended') {
+          audioContext.resume().then(() => {
+            console.log("[audio] Audio context resumed");
+            setAudioInitialized(true);
+          });
+        } else {
+          setAudioInitialized(true);
+        }
+      }
+    } catch (e) {
+      console.warn("[audio] Could not initialize audio context:", e);
+    }
+  }, [audioInitialized]);
+
+  const startCall = useCallback(async () => {
+    initAudio(); // Initialize audio before starting call
+    
+    setTokenError(null);
+    setIsConnecting(true);
+    const started = performance.now();
+    setConnectStartAt(started);
+    console.info("[voice] Start Call clicked");
+    
+    try {
+      // Use prefetched token if available
+      if (prefetchedToken) {
+        console.info("[voice] Using prefetched token");
+        setConnectionDetails(prefetchedToken);
+        setPrefetchedToken(null);
+        setIsConnecting(false);
+        return;
+      }
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      const response = await fetch(`/api/token?t=${Date.now()}`, { 
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      
+      const data = await response.json();
+      const tokenMs = Math.round(performance.now() - started);
+      console.info("[voice] Token received", { totalMs: tokenMs, ok: response.ok });
+      
+      if (!response.ok) {
+        setTokenError(data?.detail ?? data?.error ?? "Failed to get token");
+        setIsConnecting(false);
+        return;
+      }
+      
+      if (!data?.token || !data?.url) {
+        setTokenError("Invalid token response");
+        setIsConnecting(false);
+        return;
+      }
+      
+      setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName ?? "" });
+    } catch (error: unknown) {
+      const isAbort = error instanceof Error && error.name === 'AbortError';
+      if (isAbort) {
+        setTokenError("Request timed out. Please try again.");
+      } else {
+        console.error("Failed to get token:", error);
+        setTokenError("Could not reach server. Check network and try again.");
+      }
+    } finally {
       setIsConnecting(false);
-      return;
     }
-    
-    // Use AbortController for timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    
-    const response = await fetch(`/api/token?t=${Date.now()}`, { 
-      cache: "no-store",
-      signal: controller.signal,
-      priority: "high",
-      // Add keepalive for connection reuse
-      keepalive: true
-    });
-    
-    clearTimeout(timeoutId);
-    
-    const data = await response.json();
-    const tokenMs = Math.round(performance.now() - started);
-    console.info("[voice] Token received", { totalMs: tokenMs, ok: response.ok });
-    
-    if (!response.ok) {
-      setTokenError(data?.detail ?? data?.error ?? "Failed to get token");
-      setIsConnecting(false);
-      return;
-    }
-    
-    if (!data?.token || !data?.url) {
-      setTokenError("Invalid token response");
-      setIsConnecting(false);
-      return;
-    }
-    
-    setConnectionDetails({ token: data.token, url: data.url, roomName: data.roomName ?? "" });
-  } catch (error: unknown) {
-    const isAbort = error instanceof Error && error.name === 'AbortError';
-    if (isAbort) {
-      setTokenError("Request timed out. Please try again.");
-    } else {
-      console.error("Failed to get token:", error);
-      setTokenError("Could not reach server. Check network and try again.");
-    }
-  } finally {
-    setIsConnecting(false);
-  }
-}, [prefetchedToken]);
+  }, [prefetchedToken, initAudio]);
 
   const endCall = useCallback(() => {
     try {
@@ -462,7 +456,7 @@ const startCall = useCallback(async () => {
     }
     setConnectionDetails(null);
     
-    // Pre-fetch a new token for next call
+    // Pre-fetch next token
     const prefetchNext = async () => {
       try {
         const controller = new AbortController();
@@ -483,7 +477,7 @@ const startCall = useCallback(async () => {
               url: data.url, 
               roomName: data.roomName ?? "" 
             });
-            console.info("[voice] Next token pre-fetched successfully");
+            console.info("[voice] Next token pre-fetched");
           }
         }
       } catch (error: any) {
@@ -498,51 +492,41 @@ const startCall = useCallback(async () => {
   if (connectionDetails) {
     return (
       <LiveKitRoom
-  key={connectionDetails.token}
-  token={connectionDetails.token}
-  serverUrl={connectionDetails.url}
-  connect={true}
-  audio={{
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  }}
-  // Add connectOptions for faster connection
-  connectOptions={{
-    autoSubscribe: true,
-    maxRetries: 2,
-  }}
-  onConnected={() => {
-    const total = connectStartAt ? Math.round(performance.now() - connectStartAt) : null;
-    console.info("[voice] LiveKit connected", { totalMsSinceClick: total });
-    
-    // Force audio context to start immediately
-    if (typeof window !== 'undefined') {
-      // This helps with browser autoplay policies
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      if (audioContext.state === 'suspended') {
-        audioContext.resume();
-      }
-    }
-  }}
-  onError={(error) => {
-    console.error("LiveKit room error:", error);
-  }}
->
-  <VoiceAssistantUI onDisconnect={endCall} />
-</LiveKitRoom>
+        key={connectionDetails.token}
+        token={connectionDetails.token}
+        serverUrl={connectionDetails.url}
+        connect={true}
+        audio={{
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }}
+        connectOptions={{
+          autoSubscribe: true,
+          maxRetries: 2,
+          peerConnectionTimeout: 10000,
+        }}
+        onConnected={() => {
+          const total = connectStartAt ? Math.round(performance.now() - connectStartAt) : null;
+          console.info("[voice] LiveKit connected", { totalMsSinceClick: total });
+        }}
+        onError={(error) => {
+          console.error("LiveKit room error:", error);
+        }}
+      >
+        <VoiceAssistantUI onDisconnect={endCall} />
+      </LiveKitRoom>
     );
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen gap-8">
+    <div className="flex flex-col items-center justify-center min-h-screen gap-8" onClick={initAudio}>
       <img src="/dialzia.png" alt="Zia" className="w-24 h-24" />
       <h1 className="text-3xl font-bold">Talk to Zia</h1>
       <p className="text-gray-400 text-center max-w-md">
         Click the button below to start a conversation with Zia,<br/> our AI voice assistant.
       </p>
 
-      {/* Mic icon */}
       <div className="w-24 h-24 rounded-full bg-gray-800 flex items-center justify-center">
         <svg
           width="40"
@@ -578,6 +562,5 @@ const startCall = useCallback(async () => {
         {isConnecting ? "Connecting..." : "Start Call"}
       </button>
     </div>
- 
-);
+  );
 }

@@ -1,13 +1,12 @@
-// app/api/token/route.ts (optimized)
 export const dynamic = "force-dynamic";
-export const revalidate = 0; // Disable caching
+export const revalidate = 0;
 
 import { AccessToken } from "livekit-server-sdk";
 import { NextResponse } from "next/server";
 
-// Cache token generation for a short period to handle rapid requests
+// Simple in-memory cache
 const tokenCache = new Map();
-const CACHE_TTL = 5000; // 5 seconds
+const CACHE_TTL = 5000;
 
 function jsonError(error: string, detail: string, status: number = 500) {
   return NextResponse.json({ error, detail }, { status });
@@ -17,7 +16,7 @@ export async function GET() {
   const startedAt = Date.now();
 
   try {
-    // Check cache first (for rapid repeated requests)
+    // Check cache
     const cacheKey = "livekit_token";
     const cached = tokenCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
@@ -27,18 +26,14 @@ export async function GET() {
       return response;
     }
 
-    // Prefer server-only env vars (Netlify/production). Fallback to NEXT_PUBLIC_ for local dev.
-    const apiKey =
-      process.env.LIVEKIT_API_KEY ?? process.env.NEXT_PUBLIC_LIVEKIT_API_KEY;
-    const apiSecret =
-      process.env.LIVEKIT_API_SECRET ?? process.env.NEXT_PUBLIC_LIVEKIT_API_SECRET;
-    const livekitUrl =
-      process.env.NEXT_PUBLIC_LIVEKIT_URL ?? process.env.LIVEKIT_URL;
+    const apiKey = process.env.LIVEKIT_API_KEY ?? process.env.NEXT_PUBLIC_LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET ?? process.env.NEXT_PUBLIC_LIVEKIT_API_SECRET;
+    const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL ?? process.env.LIVEKIT_URL;
 
     if (!apiKey?.trim() || !apiSecret?.trim() || !livekitUrl?.trim()) {
       return jsonError(
         "Server misconfigured",
-        "Set LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and NEXT_PUBLIC_LIVEKIT_URL (or LIVEKIT_URL) in .env.local."
+        "Missing LiveKit credentials"
       );
     }
 
@@ -49,6 +44,7 @@ export async function GET() {
       identity: participantName,
       ttl: "15m",
     });
+    
     at.addGrant({
       roomJoin: true,
       room: roomName,
@@ -68,14 +64,12 @@ export async function GET() {
     });
 
     const response = NextResponse.json(responseData);
-    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-    response.headers.set("Pragma", "no-cache");
+    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     response.headers.set("X-Token-Gen-Ms", String(Date.now() - startedAt));
 
     return response;
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
     console.error("[api/token] Error:", e);
-    return jsonError("Token generation failed", message);
+    return jsonError("Token generation failed", e instanceof Error ? e.message : String(e));
   }
 }

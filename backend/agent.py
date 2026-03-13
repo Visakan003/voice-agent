@@ -22,7 +22,8 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
-    llm
+    llm,
+    vad
 )
 from livekit.agents import worker as livekit_worker
 from livekit.agents.worker import JobExecutorType
@@ -62,11 +63,22 @@ CALENDLY_TOKEN = (os.getenv("CALENDLY_ACCESS_TOKEN") or "").strip()
 CALENDLY_EVENT_TYPE = (os.getenv("CALENDLY_EVENT_TYPE_URI") or "").strip()
 CALENDLY_LOCATION_KIND = (os.getenv("CALENDLY_LOCATION_KIND") or "").strip()
 
+# Global VAD instance (loaded once)
+_VAD_INSTANCE = None
+
+def get_vad():
+    """Get or create VAD instance (singleton)"""
+    global _VAD_INSTANCE
+    if _VAD_INSTANCE is None:
+        logger.info("Loading VAD model...")
+        _VAD_INSTANCE = silero.VAD.load()
+        logger.info("VAD model loaded")
+    return _VAD_INSTANCE
 
 def _normalize_calendly_location_kind_from_env(raw: str) -> str:
     """Map env value to kind."""
     if not raw:
-        return "custom_link"  # Default
+        return "custom_link"
     k = raw.strip().lower()
     if k in ("custom", "custom_link", "zoom_conference", "google_meet"):
         return k
@@ -75,7 +87,6 @@ def _normalize_calendly_location_kind_from_env(raw: str) -> str:
     if "google" in k or "meet" in k:
         return "google_meet"
     return "custom_link"
-
 
 async def _fetch_calendly_availability() -> list[dict]:
     """Fetch available time slots - simplified."""
@@ -108,13 +119,11 @@ async def _fetch_calendly_availability() -> list[dict]:
             if start:
                 slots.append({"start": start})
         return slots
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error fetching Calendly availability: {e}")
         return []
 
-
-@function_tool(
-    description="Check calendar availability."
-)
+@function_tool(description="Check calendar availability.")
 async def check_calendly_availability() -> str:
     """Fast availability check."""
     slots = await _fetch_calendly_availability()
@@ -133,7 +142,6 @@ async def check_calendly_availability() -> str:
                 lines.append(start)
     
     return "Available times: " + "; ".join(lines)
-
 
 async def _create_calendly_invitee(email: str, start_time_iso: str) -> tuple[dict | None, str]:
     """Create invitee - simplified."""
@@ -166,17 +174,17 @@ async def _create_calendly_invitee(email: str, start_time_iso: str) -> tuple[dic
             ) as resp:
                 if resp.status in (200, 201):
                     return ({}, "")
+                error_text = await resp.text()
+                logger.error(f"Calendly API error {resp.status}: {error_text}")
                 return None, f"API error {resp.status}"
     except Exception as e:
+        logger.error(f"Calendly invitee creation error: {e}")
         return None, str(e)
-
 
 def _make_book_calendly_meeting_tool(room):
     """Factory for booking tool."""
     
-    @function_tool(
-        description="Book meeting in Calendly for chosen time."
-    )
+    @function_tool(description="Book meeting in Calendly for chosen time.")
     async def book_calendly_meeting(start_time: str, email: str = "") -> str:
         """Create Calendly invitee."""
         if not email:
@@ -207,26 +215,28 @@ def _make_book_calendly_meeting_tool(room):
     
     return book_calendly_meeting
 
-
 def prewarm(proc: JobProcess):
-    """Ultra-light prewarm."""
+    """Pre-warm the worker process - load heavy models here."""
+    logger.info("Pre-warming worker...")
+    
+    # Load VAD model during pre-warm
+    proc.userdata["vad"] = get_vad()
     proc.userdata["knowledge"] = KNOWLEDGE_PROMPT
-    logger.info("Worker prewarmed")
-
+    
+    logger.info("Worker pre-warmed successfully")
 
 async def entrypoint(ctx: JobContext):
     start_time = time.perf_counter()
+    logger.info("Entrypoint started")
     
     # Connect immediately
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    logger.info(f"Connected in {time.perf_counter() - start_time:.2f}s")
+    logger.info(f"Connected to room in {time.perf_counter() - start_time:.2f}s")
     
     room = ctx.room
     
     # Define tools
-    @function_tool(
-        description="Save booking details after collecting email, phone, country."
-    )
+    @function_tool(description="Save booking details after collecting email, phone, country.")
     async def store_booking_details(email: str, phone: str, country: str) -> str:
         if not EMAIL_REGEX.match(email.strip()):
             return "Invalid email format."
@@ -243,31 +253,30 @@ async def entrypoint(ctx: JobContext):
         )
         return "Booking details saved!"
     
-    @function_tool(
-        description="Get stored booking details."
-    )
+    @function_tool(description="Get stored booking details.")
     async def get_stored_booking_details() -> str:
         stored = _room_booking_store.get(room.name)
         if not stored:
             return "No details stored yet."
         return f"Stored: email {stored['email']}"
     
-    # IMPORTANT FIX: Create VAD and proper session configuration
-    vad = silero.VAD.load()
+    # Use pre-warmed VAD
+    vad_instance = ctx.proc.userdata.get("vad") or get_vad()
     
-    # Create session with proper configuration for listening
+    # Create session with optimized configuration
+    logger.info("Creating agent session...")
     session = AgentSession(
-        vad=vad,  # Add VAD for listening
+        vad=vad_instance,
         llm=openai.realtime.RealtimeModel(
-            model="gpt-4o-realtime-preview-2024-12-17",  # Use correct model name
+            model="gpt-4o-realtime-preview-2024-12-17",
             voice="alloy",
             temperature=0.8,
-            turn_detection=ServerVad(
-                type="server_vad",
-                threshold=0.5,
-                silence_duration_ms=500,  # Increased for better listening
-                prefix_padding_ms=300,
-            ),
+            turn_detection={
+                "type": "server_vad",
+                "threshold": 0.5,
+                "silence_duration_ms": 500,
+                "prefix_padding_ms": 300,
+            },
         ),
     )
     
@@ -281,12 +290,13 @@ async def entrypoint(ctx: JobContext):
         ],
     )
     
-    # FIX: Wait for session to be fully ready
+    # Start session
     logger.info("Starting session...")
+    session_start = time.perf_counter()
     await session.start(agent=agent, room=room)
-    logger.info(f"Session started in {time.perf_counter() - start_time:.2f}s")
+    logger.info(f"Session started in {time.perf_counter() - session_start:.2f}s")
     
-    # Send greeting after session is ready
+    # Send greeting immediately after session start
     try:
         await session.generate_reply(
             instructions="Say: Hey there! I'm Zia from Atlasium. How can I help you today?"
@@ -294,21 +304,18 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Greeting sent in {time.perf_counter() - start_time:.2f}s")
     except Exception as e:
         logger.error(f"Failed to send greeting: {e}")
-        # Retry once
+        # Quick retry
         try:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
             await session.generate_reply(
                 instructions="Say: Hi! I'm Zia. How can I help you today?"
             )
         except Exception as e2:
             logger.error(f"Retry failed: {e2}")
     
-    # Keep alive and monitor
+    # Keep alive with minimal logging
     while True:
-        await asyncio.sleep(1)
-        # Optional: Add health check logging
-        # logger.debug("Agent is active")
-
+        await asyncio.sleep(5)
 
 if __name__ == "__main__":
     logger.info("Starting voice agent...")
@@ -318,6 +325,6 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
             job_executor_type=JobExecutorType.PROCESS,
-            num_idle_processes=1,
+            num_idle_processes=2,  # Keep 2 processes warm
         ),
     )
