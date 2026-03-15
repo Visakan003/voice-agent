@@ -190,11 +190,13 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
           const startTime = data.start_time as string | undefined;
           const email = data.email as string | undefined;
           const error = data.error as string | undefined;
+          const result = (data.result as Record<string, unknown> | undefined) ?? null;
           console.log("[Zia] Meeting booking result:", {
             booked,
             start_time: startTime,
             email,
             error: error ?? null,
+            calendly_response: result,
           });
         }
       } catch (e) {
