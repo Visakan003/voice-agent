@@ -485,11 +485,11 @@ async def entrypoint(ctx: JobContext):
         llm=openai.realtime.RealtimeModel(
             model="gpt-4o-realtime-preview-2024-12-17",
             voice="shimmer",
-            temperature=2.0,
+            temperature=0.8,
             turn_detection={
                 "type": "server_vad",
                 "threshold": 0.9,
-                "silence_duration_ms": 500,
+                "silence_duration_ms": 1000,
                 "prefix_padding_ms": 300,
             },
         ),

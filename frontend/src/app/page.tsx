@@ -12,6 +12,12 @@ import "@livekit/components-styles";
 
 const BOOKING_STORAGE_KEY = "zia_booking_details";
 
+function formatDuration(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 // ---------------------------------------------------------------------------
 // Speaking animation
 // ---------------------------------------------------------------------------
@@ -50,15 +56,15 @@ function SpeakingAnimation({ state }: { state: string }) {
           <>
             <div
               className="absolute w-40 h-40 rounded-full border-2 speaking-ring"
-              style={{ borderColor: ringColor, animationDelay: "0s" }}
+              style={{ borderColor: "#22d3ee", animationDelay: "0s" }}
             />
             <div
               className="absolute w-32 h-32 rounded-full border-2 speaking-ring"
-              style={{ borderColor: ringColor, animationDelay: "0.3s" }}
+              style={{ borderColor: "#8b5cf6", animationDelay: "0.3s" }}
             />
             <div
               className="absolute w-24 h-24 rounded-full border-2 speaking-ring"
-              style={{ borderColor: ringColor, animationDelay: "0.6s" }}
+              style={{ borderColor: "#ec4899", animationDelay: "0.6s" }}
             />
           </>
         )}
@@ -118,6 +124,8 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const [isMuted, setIsMuted] = useState(false);
   const [roomConnected, setRoomConnected] = useState(false);
   const [agentSpokeOnce, setAgentSpokeOnce] = useState(false);
+  const [callDurationSec, setCallDurationSec] = useState(0);
+  const [latestAiText, setLatestAiText] = useState("Waiting for response...");
   const micEnabledRef = useRef(false);
 
   // -------------------------------------------------------------------------
@@ -139,6 +147,17 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
       room.off("disconnected", handleDisconnected);
     };
   }, [room]);
+
+  useEffect(() => {
+    if (!roomConnected) {
+      setCallDurationSec(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setCallDurationSec((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [roomConnected]);
 
   // -------------------------------------------------------------------------
   // Resume AudioContext the moment the room connects (fixes Safari / mobile)
@@ -167,6 +186,33 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
       setAgentSpokeOnce(true);
     }
   }, [state, agentSpokeOnce]);
+
+  // Try to show latest spoken/transcribed text if transcription events are available.
+  useEffect(() => {
+    if (!room) return;
+
+    const handleTranscription = (segments: any[] = []) => {
+      if (!Array.isArray(segments)) return;
+      const text = segments
+        .map((seg) => String(seg?.text ?? "").trim())
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      if (!text) return;
+
+      // participant identity is often present on each segment
+      const firstSeg = segments[0] ?? {};
+      const fromIdentity = String(firstSeg?.participantIdentity ?? "").toLowerCase();
+      if (!fromIdentity.includes("user")) {
+        setLatestAiText(text);
+      }
+    };
+
+    room.on("transcriptionReceived", handleTranscription);
+    return () => {
+      room.off("transcriptionReceived", handleTranscription);
+    };
+  }, [room]);
 
   // -------------------------------------------------------------------------
   // Clear booking data when room disconnects
@@ -225,6 +271,9 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
             error: data.error ?? null,
             raw: data,
           });
+          if (data.booked === true) {
+            setLatestAiText("Great news, your meeting has been booked successfully.");
+          }
         }
       } catch (e) {
         console.error("[Zia] Failed to parse data:", topic, e);
@@ -283,18 +332,31 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
     : state;
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen gap-8">
-      <h1 className="text-2xl font-semibold">Talk to Zia</h1>
+    <div className="relative flex flex-col items-center justify-center min-h-screen gap-8 overflow-hidden bg-gradient-to-br from-slate-950 via-indigo-950 to-fuchsia-950 text-white">
+      <div className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-cyan-500/20 blur-3xl animate-pulse" />
+      <div className="pointer-events-none absolute -bottom-24 -right-16 h-80 w-80 rounded-full bg-fuchsia-500/20 blur-3xl animate-pulse" />
+
+      <h1 className="text-2xl font-semibold tracking-wide">Talk to Zia</h1>
+      <div className="px-4 py-2 rounded-full border border-white/20 bg-white/10 backdrop-blur text-sm font-medium">
+        {formatDuration(callDurationSec)}
+      </div>
 
       <SpeakingAnimation state={displayState} />
+
+      <div className="w-full max-w-2xl px-4">
+        <div className="rounded-2xl border border-white/15 bg-black/25 backdrop-blur-md p-4 shadow-xl">
+          <p className="text-xs uppercase tracking-wider text-cyan-300 mb-1">Latest AI response</p>
+          <p className="text-sm text-white/90 min-h-6">{latestAiText}</p>
+        </div>
+      </div>
 
       <div className="flex gap-4">
         <button
           onClick={toggleMute}
-          className={`px-6 py-3 rounded-full font-medium transition-colors ${
+          className={`px-6 py-3 rounded-full font-medium transition-all duration-300 ${
             isMuted
-              ? "bg-yellow-600 hover:bg-yellow-700"
-              : "bg-gray-700 hover:bg-gray-600"
+              ? "bg-yellow-500/90 hover:bg-yellow-500"
+              : "bg-white/20 hover:bg-white/30"
           }`}
         >
           {isMuted ? (
@@ -341,7 +403,7 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
 
         <button
           onClick={onDisconnect}
-          className="px-6 py-3 rounded-full font-medium bg-red-600 hover:bg-red-700 transition-colors flex items-center gap-2"
+          className="px-6 py-3 rounded-full font-medium bg-red-600/90 hover:bg-red-500 transition-all duration-300 flex items-center gap-2 shadow-lg shadow-red-900/40"
         >
           <svg
             width="20"
@@ -533,23 +595,25 @@ export default function Home() {
 
   return (
     <div
-      className="flex flex-col items-center justify-center min-h-screen gap-8"
+      className="relative flex flex-col items-center justify-center min-h-screen gap-8 overflow-hidden bg-gradient-to-br from-slate-950 via-purple-950 to-indigo-950 text-white"
       onClick={initAudio}
     >
+      <div className="pointer-events-none absolute -top-24 -left-20 h-80 w-80 rounded-full bg-cyan-500/20 blur-3xl animate-pulse" />
+      <div className="pointer-events-none absolute -bottom-24 -right-20 h-96 w-96 rounded-full bg-fuchsia-500/20 blur-3xl animate-pulse" />
       <img src="/dialzia.png" alt="Zia" className="w-24 h-24" />
       <h1 className="text-3xl font-bold">Talk to Zia</h1>
-      <p className="text-gray-400 text-center max-w-md">
+      <p className="text-gray-300 text-center max-w-md">
         Click the button below to start a conversation with Zia,
         <br /> our AI voice assistant.
       </p>
 
-      <div className="w-24 h-24 rounded-full bg-gray-800 flex items-center justify-center">
+      <div className="w-24 h-24 rounded-full bg-white/10 border border-white/20 flex items-center justify-center animate-pulse">
         <svg
           width="40"
           height="40"
           viewBox="0 0 24 24"
           fill="none"
-          stroke="#9ca3af"
+          stroke="#d1d5db"
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
