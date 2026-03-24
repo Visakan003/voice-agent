@@ -220,7 +220,10 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
             booked: data.booked,
             start_time: data.start_time,
             email: data.email,
+            scheduled_event_uri: data.scheduled_event_uri ?? null,
+            invitee_uri: data.invitee_uri ?? null,
             error: data.error ?? null,
+            raw: data,
           });
         }
       } catch (e) {

@@ -126,7 +126,7 @@ Offer 2-3 options: "I have [time] and [time] — which works for you?"
 
 When user picks a time, call book_calendly_meeting with the start_time (ISO format from availability list).
 
-Confirm: "You'll get a calendar invite from Calendly shortly."
+Confirm: "Perfect. Your walkthrough has been booked for that slot. You'll receive a confirmation email shortly."
 
 Do NOT direct users to website forms — you handle the booking.
 

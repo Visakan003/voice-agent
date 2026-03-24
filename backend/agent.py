@@ -36,6 +36,10 @@ EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Calendly API
 CALENDLY_API_BASE = "https://api.calendly.com"
+CALENDLY_FALLBACK_WEBHOOK_URL = (
+    os.getenv("CALENDLY_FALLBACK_WEBHOOK_URL")
+    or "https://atlasium788ai.app.n8n.cloud/webhook/calendy-send-fallback-mail"
+).strip()
 
 # Load environment variables
 load_dotenv()
@@ -57,6 +61,7 @@ if os.getenv("LIVEKIT_FORCE_THREADED_DNS", "1").strip().lower() in {"1", "true",
 CALENDLY_TOKEN = (os.getenv("CALENDLY_ACCESS_TOKEN") or "").strip()
 CALENDLY_EVENT_TYPE = (os.getenv("CALENDLY_EVENT_TYPE_URI") or "").strip()
 CALENDLY_LOCATION_KIND = (os.getenv("CALENDLY_LOCATION_KIND") or "").strip()
+CALENDLY_SCHEDULING_LINK = (os.getenv("CALENDLY_SCHEDULING_LINK") or "").strip()
 
 # Global VAD instance (loaded once)
 _VAD_INSTANCE = None
@@ -86,10 +91,49 @@ def _normalize_calendly_location_kind_from_env(raw: str) -> str:
     return "custom_link"
 
 
-async def _fetch_calendly_availability() -> list[dict]:
+async def _trigger_calendly_fallback_mail(
+    *,
+    email: str = "",
+    phone: str = "",
+    meeting_book_link: str = "",
+    reason: str = "",
+) -> None:
+    """Send fallback payload to n8n webhook when Calendly API fails."""
+    if not CALENDLY_FALLBACK_WEBHOOK_URL:
+        logger.warning("Calendly fallback webhook URL missing; skipping fallback notification")
+        return
+
+    payload = {
+        "email": (email or "").strip(),
+        "phone": (phone or "").strip(),
+        "meeting_book_link": (meeting_book_link or "").strip(),
+        "reason": (reason or "").strip(),
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                CALENDLY_FALLBACK_WEBHOOK_URL,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            ) as resp:
+                body = await resp.text()
+                if resp.status in (200, 201, 202):
+                    logger.info(
+                        f"Calendly fallback webhook sent successfully status={resp.status} payload={payload}"
+                    )
+                else:
+                    logger.error(
+                        f"Calendly fallback webhook failed status={resp.status} body={body} payload={payload}"
+                    )
+    except Exception as e:
+        logger.error(f"Calendly fallback webhook error: {e} payload={payload}")
+
+
+async def _fetch_calendly_availability() -> tuple[list[dict], str | None]:
     """Fetch available time slots from Calendly."""
     if not CALENDLY_TOKEN or not CALENDLY_EVENT_TYPE:
-        return []
+        return [], "Calendly not configured"
 
     now = datetime.now(timezone.utc)
     params = {
@@ -106,7 +150,8 @@ async def _fetch_calendly_availability() -> list[dict]:
                 headers={"Authorization": f"Bearer {CALENDLY_TOKEN}"},
             ) as resp:
                 if resp.status != 200:
-                    return []
+                    err = await resp.text()
+                    return [], f"API error {resp.status}: {err}"
                 data = await resp.json()
 
         collection = data.get("collection") or data.get("items") or []
@@ -116,16 +161,18 @@ async def _fetch_calendly_availability() -> list[dict]:
             start = r.get("start_time")
             if start:
                 slots.append({"start": start})
-        return slots
+        return slots, None
     except Exception as e:
         logger.error(f"Error fetching Calendly availability: {e}")
-        return []
+        return [], str(e)
 
 
 @function_tool(description="Check calendar availability.")
 async def check_calendly_availability() -> str:
     """Return a human-readable list of available slots."""
-    slots = await _fetch_calendly_availability()
+    slots, error = await _fetch_calendly_availability()
+    if error:
+        return f"No availability found. Calendly error: {error}"
     if not slots:
         return "No availability found. Ask user to visit booking link."
 
@@ -144,13 +191,7 @@ async def check_calendly_availability() -> str:
 
 
 async def _create_calendly_invitee(email: str, start_time_iso: str) -> tuple[dict | None, str]:
-    """
-    Create a single-use booking link for the given Calendly event type.
-
-    Note: this implementation generates a scheduling link. It does not guarantee
-    the chosen slot is pre-filled, so the user confirms the exact time via
-    the returned booking URL.
-    """
+    """Create a confirmed Calendly booking for the selected slot."""
     if not CALENDLY_TOKEN or not CALENDLY_EVENT_TYPE:
         return None, "Calendly not configured"
 
@@ -158,16 +199,29 @@ async def _create_calendly_invitee(email: str, start_time_iso: str) -> tuple[dic
     if not start_time_iso.endswith("Z"):
         start_time_iso += "Z"
 
+    location_kind = _normalize_calendly_location_kind_from_env(CALENDLY_LOCATION_KIND)
+
+    logger.info("Calendly: creating invitee booking")
+    logger.info(
+        f"Calendly: event_type={CALENDLY_EVENT_TYPE} start_time={start_time_iso} email_present={bool(email)}"
+    )
+
     payload = {
-        "max_event_count": 1,
-        "owner": CALENDLY_EVENT_TYPE,
-        "owner_type": "EventType",
+        "event_type": CALENDLY_EVENT_TYPE,
+        "start_time": start_time_iso,
+        "invitee": {
+            "email": email.strip(),
+            "name": "Guest",
+            "timezone": "UTC",
+        },
+        "location": {"kind": location_kind},
     }
 
     try:
         async with aiohttp.ClientSession() as session:
+            # Preferred path for direct booking: /invitees
             async with session.post(
-                f"{CALENDLY_API_BASE}/scheduling_links",
+                f"{CALENDLY_API_BASE}/invitees",
                 headers={
                     "Authorization": f"Bearer {CALENDLY_TOKEN}",
                     "Content-Type": "application/json",
@@ -176,22 +230,60 @@ async def _create_calendly_invitee(email: str, start_time_iso: str) -> tuple[dic
             ) as resp:
                 if resp.status in (200, 201):
                     body = await resp.json()
-                    link = body.get("resource", {}).get("booking_url", "")
-                    if link:
-                        logger.info(
-                            "Created scheduling link for event type",
-                        )
-                        return ({"booking_url": link}, "")
-                    return (body, "")
+                    resource = body.get("resource", {})
+                    scheduled_event_uri = resource.get("scheduled_event", "")
+                    invitee_uri = resource.get("uri", "")
+                    logger.info(
+                        f"Calendly: invitee created scheduled_event_uri={scheduled_event_uri} invitee_uri={invitee_uri}"
+                    )
+                    return (
+                        {
+                            "scheduled_event_uri": scheduled_event_uri,
+                            "invitee_uri": invitee_uri,
+                        },
+                        "",
+                    )
 
                 error_text = await resp.text()
-                logger.error(f"Calendly scheduling link error {resp.status}: {error_text}")
-                return (
-                    None,
-                    f"API error {resp.status}: {error_text}",
-                )
+                logger.error(f"Calendly invitee booking error {resp.status}: {error_text}")
+
+                # Optional fallback for environments that only expose /scheduled_events.
+                # Some Calendly plans/APIs still restrict direct booking calls.
+                fallback_payload = {
+                    "event_type": CALENDLY_EVENT_TYPE,
+                    "start_time": start_time_iso,
+                    "invitee": {
+                        "email": email.strip(),
+                        "name": "Guest",
+                        "timezone": "UTC",
+                    },
+                }
+                async with session.post(
+                    f"{CALENDLY_API_BASE}/scheduled_events",
+                    headers={
+                        "Authorization": f"Bearer {CALENDLY_TOKEN}",
+                        "Content-Type": "application/json",
+                    },
+                    json=fallback_payload,
+                ) as fallback_resp:
+                    if fallback_resp.status in (200, 201):
+                        body = await fallback_resp.json()
+                        scheduled_event_uri = body.get("resource", {}).get("uri", "")
+                        logger.info(
+                            f"Calendly: scheduled event created scheduled_event_uri={scheduled_event_uri}"
+                        )
+                        return ({"scheduled_event_uri": scheduled_event_uri}, "")
+
+                    fallback_error_text = await fallback_resp.text()
+                    logger.error(
+                        f"Calendly scheduled_events booking error {fallback_resp.status}: {fallback_error_text}"
+                    )
+                    return (
+                        None,
+                        f"API error invitees={resp.status}: {error_text}; scheduled_events={fallback_resp.status}: {fallback_error_text}",
+                    )
     except Exception as e:
-        logger.error(f"Calendly scheduling link creation error: {e}")
+        logger.error(f"Calendly booking creation error: {e}")
         return None, str(e)
 
 
@@ -208,6 +300,21 @@ def _make_book_calendly_meeting_tool(room):
 
         result, error = await _create_calendly_invitee(email, start_time)
 
+        logger.info(
+            "Calendly: booking result",
+            extra={},
+        )
+        if result:
+            logger.info(
+                "Calendly: booked event",
+                extra={},
+            )
+            logger.info(
+                f"Calendly: scheduled_event_uri={(result or {}).get('scheduled_event_uri','')} invitee_uri={(result or {}).get('invitee_uri','')}"
+            )
+        else:
+            logger.info(f"Calendly: error={error}")
+
         asyncio.create_task(
             room.local_participant.publish_data(
                 json.dumps({
@@ -215,7 +322,8 @@ def _make_book_calendly_meeting_tool(room):
                     "booked": result is not None,
                     "start_time": start_time,
                     "email": email,
-                    "booking_url": (result or {}).get("booking_url", ""),
+                    "scheduled_event_uri": (result or {}).get("scheduled_event_uri", ""),
+                    "invitee_uri": (result or {}).get("invitee_uri", ""),
                     "error": error if not result else None,
                 }).encode("utf-8"),
                 topic="meeting_booked",
@@ -223,13 +331,21 @@ def _make_book_calendly_meeting_tool(room):
         )
 
         if result:
-            booking_url = (result or {}).get("booking_url", "")
-            if booking_url:
-                return (
-                    f"Booking link created: {booking_url}. "
-                    "Use this link to confirm your slot."
-                )
-            return "Booking created! Use the calendar link we provided."
+            return (
+                "Perfect - your walkthrough is booked and Calendly has confirmed it. "
+                "You'll receive a confirmation email shortly."
+            )
+
+        # Trigger fallback mail webhook on booking errors.
+        stored = _room_booking_store.get(room.name, {})
+        asyncio.create_task(
+            _trigger_calendly_fallback_mail(
+                email=email or stored.get("email", ""),
+                phone=stored.get("phone", ""),
+                meeting_book_link=CALENDLY_SCHEDULING_LINK,
+                reason=f"booking_failed: {error}",
+            )
+        )
         return f"Booking failed: {error}. Want to try again?"
 
     return book_calendly_meeting
@@ -327,6 +443,36 @@ async def entrypoint(ctx: JobContext):
             return "No details stored yet."
         return f"Stored: email {stored['email']}"
 
+    @function_tool(description="Check calendar availability.")
+    async def check_room_calendly_availability() -> str:
+        slots, error = await _fetch_calendly_availability()
+        if error:
+            stored = _room_booking_store.get(room.name, {})
+            asyncio.create_task(
+                _trigger_calendly_fallback_mail(
+                    email=stored.get("email", ""),
+                    phone=stored.get("phone", ""),
+                    meeting_book_link=CALENDLY_SCHEDULING_LINK,
+                    reason=f"availability_failed: {error}",
+                )
+            )
+            return "No availability found. Ask user to visit booking link."
+
+        if not slots:
+            return "No availability found. Ask user to visit booking link."
+
+        lines = []
+        for s in slots[:5]:
+            start = s.get("start")
+            if start:
+                try:
+                    dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                    human = dt.strftime("%A %B %d at %I:%M %p UTC")
+                    lines.append(f"{human} ({start})")
+                except Exception:
+                    lines.append(start)
+        return "Available times: " + "; ".join(lines)
+
     # ------------------------------------------------------------------ #
     # Session + Agent setup                                               #
     # ------------------------------------------------------------------ #
@@ -357,7 +503,7 @@ async def entrypoint(ctx: JobContext):
             store_email,
             store_contact_details,
             get_stored_booking_details,
-            check_calendly_availability,
+            check_room_calendly_availability,
             book_calendly_meeting,
         ],
     )
