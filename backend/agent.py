@@ -135,7 +135,7 @@ async def _fetch_calendly_availability() -> tuple[list[dict], str | None]:
     if not CALENDLY_TOKEN or not CALENDLY_EVENT_TYPE:
         return [], "Calendly not configured"
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc) + timedelta(hours=1)
     params = {
         "event_type": CALENDLY_EVENT_TYPE,
         "start_time": now.isoformat().replace("+00:00", "Z"),
@@ -157,8 +157,7 @@ async def _fetch_calendly_availability() -> tuple[list[dict], str | None]:
         collection = data.get("collection") or data.get("items") or []
         slots = []
         for s in collection[:10]:
-            r = s.get("resource") or s
-            start = r.get("start_time")
+            start = s.get("start_time")
             if start:
                 slots.append({"start": start})
         return slots, None
@@ -182,7 +181,8 @@ async def check_calendly_availability() -> str:
         if start:
             try:
                 dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
-                human = dt.strftime("%A %B %d at %I:%M %p UTC")
+                time_part = dt.strftime("%I:%M %p").lstrip("0")
+                human = dt.strftime("%A %B %d") + f" at {time_part} UTC"
                 lines.append(f"{human} ({start})")
             except Exception:
                 lines.append(start)
@@ -467,7 +467,8 @@ async def entrypoint(ctx: JobContext):
             if start:
                 try:
                     dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
-                    human = dt.strftime("%A %B %d at %I:%M %p UTC")
+                    time_part = dt.strftime("%I:%M %p").lstrip("0")
+                    human = dt.strftime("%A %B %d") + f" at {time_part} UTC"
                     lines.append(f"{human} ({start})")
                 except Exception:
                     lines.append(start)
