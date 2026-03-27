@@ -12,6 +12,78 @@ import "@livekit/components-styles";
 
 const BOOKING_STORAGE_KEY = "zia_booking_details";
 
+type BookingFormValues = {
+  email: string;
+  countryCode: string;
+  phone: string;
+};
+
+function BookingFormPopup({
+  values,
+  submitting,
+  error,
+  onChange,
+  onSubmit,
+}: {
+  values: BookingFormValues;
+  submitting: boolean;
+  error: string | null;
+  onChange: (field: keyof BookingFormValues, value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="w-full max-w-md rounded-2xl border border-white/20 bg-white/10 backdrop-blur-xl shadow-2xl p-5">
+        <h3 className="text-lg font-semibold text-white">Quick Booking Form</h3>
+        <p className="text-sm text-gray-200 mt-1 mb-4">
+          Fill this once and I will fetch available slots for you.
+        </p>
+
+        <label className="text-xs text-cyan-200">Email</label>
+        <input
+          value={values.email}
+          onChange={(e) => onChange("email", e.target.value)}
+          type="email"
+          className="mt-1 mb-3 w-full rounded-lg border border-white/20 bg-black/25 text-white px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-400/60"
+          placeholder="you@example.com"
+        />
+
+        <label className="text-xs text-cyan-200">Country Code</label>
+        <select
+          value={values.countryCode}
+          onChange={(e) => onChange("countryCode", e.target.value)}
+          className="mt-1 mb-3 w-full rounded-lg border border-white/20 bg-black/25 text-white px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-400/60"
+        >
+          <option value="+1">+1 (US/Canada)</option>
+          <option value="+44">+44 (UK)</option>
+          <option value="+91">+91 (India)</option>
+          <option value="+61">+61 (Australia)</option>
+          <option value="+971">+971 (UAE)</option>
+        </select>
+
+        <label className="text-xs text-cyan-200">Phone</label>
+        <input
+          value={values.phone}
+          onChange={(e) => onChange("phone", e.target.value)}
+          type="tel"
+          className="mt-1 w-full rounded-lg border border-white/20 bg-black/25 text-white px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-400/60"
+          placeholder="9876543210"
+        />
+
+        {error && <p className="text-red-300 text-xs mt-3">{error}</p>}
+
+        <button
+          onClick={onSubmit}
+          disabled={submitting}
+          className="mt-4 w-full rounded-lg bg-gradient-to-r from-cyan-500 to-fuchsia-500 px-4 py-2.5 font-medium text-white disabled:opacity-60"
+        >
+          {submitting ? "Submitting..." : "Submit Details"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function formatDuration(totalSeconds: number): string {
   const m = Math.floor(totalSeconds / 60);
   const s = totalSeconds % 60;
@@ -126,6 +198,14 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const [agentSpokeOnce, setAgentSpokeOnce] = useState(false);
   const [callDurationSec, setCallDurationSec] = useState(0);
   const [latestAiText, setLatestAiText] = useState("Waiting for response...");
+  const [showBookingForm, setShowBookingForm] = useState(false);
+  const [formSubmitting, setFormSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formValues, setFormValues] = useState<BookingFormValues>({
+    email: "",
+    countryCode: "+1",
+    phone: "",
+  });
   const micEnabledRef = useRef(false);
 
   // -------------------------------------------------------------------------
@@ -261,6 +341,27 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
           return;
         }
 
+        if (topic === "show_booking_form") {
+          setShowBookingForm(true);
+          setFormError(null);
+          return;
+        }
+
+        if (topic === "close_booking_form") {
+          setShowBookingForm(false);
+          setFormSubmitting(false);
+          setFormError(null);
+          return;
+        }
+
+        if (topic === "prefill_confirmed") {
+          setShowBookingForm(false);
+          setFormSubmitting(false);
+          setFormError(null);
+          setLatestAiText("Thanks, I got your details. Let me check available slots.");
+          return;
+        }
+
         if (topic === "meeting_booked") {
           console.log("[Zia] Meeting booking result:", {
             booked: data.booked,
@@ -285,6 +386,49 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
       room.off("dataReceived", handleData);
     };
   }, [room]);
+
+  const handleFormChange = useCallback((field: keyof BookingFormValues, value: string) => {
+    setFormValues((prev) => ({ ...prev, [field]: value }));
+  }, []);
+
+  const submitBookingForm = useCallback(async () => {
+    const email = formValues.email.trim();
+    const phoneDigits = formValues.phone.replace(/\D/g, "");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      setFormError("Please enter a valid email.");
+      return;
+    }
+    if (phoneDigits.length < 6 || phoneDigits.length > 15) {
+      setFormError("Phone must be 6 to 15 digits.");
+      return;
+    }
+    if (!localParticipant) {
+      setFormError("Not connected yet. Please try again.");
+      return;
+    }
+
+    setFormSubmitting(true);
+    setFormError(null);
+    try {
+      await localParticipant.publishData(
+        new TextEncoder().encode(
+          JSON.stringify({
+            type: "prefill_contact",
+            email,
+            countryCode: formValues.countryCode,
+            phone: `${formValues.countryCode}${phoneDigits}`,
+            country: formValues.countryCode,
+          })
+        ),
+        { topic: "prefill_contact" }
+      );
+      // Keep popup open until backend confirmation arrives.
+    } catch (e) {
+      console.error("[Zia] Failed to submit booking form:", e);
+      setFormSubmitting(false);
+      setFormError("Failed to submit. Please try again.");
+    }
+  }, [formValues, localParticipant]);
 
   // -------------------------------------------------------------------------
   // Enable microphone as soon as the room is connected
@@ -423,6 +567,15 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
       </div>
 
       <RoomAudioRenderer />
+      {showBookingForm && (
+        <BookingFormPopup
+          values={formValues}
+          submitting={formSubmitting}
+          error={formError}
+          onChange={handleFormChange}
+          onSubmit={submitBookingForm}
+        />
+      )}
     </div>
   );
 }

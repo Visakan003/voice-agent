@@ -248,7 +248,6 @@ async def _create_calendly_invitee(email: str, start_time_iso: str) -> tuple[dic
                 logger.error(f"Calendly invitee booking error {resp.status}: {error_text}")
 
                 # Optional fallback for environments that only expose /scheduled_events.
-                # Some Calendly plans/APIs still restrict direct booking calls.
                 fallback_payload = {
                     "event_type": CALENDLY_EVENT_TYPE,
                     "start_time": start_time_iso,
@@ -292,23 +291,20 @@ def _make_book_calendly_meeting_tool(room):
 
     @function_tool(description="Book meeting in Calendly for chosen time.")
     async def book_calendly_meeting(start_time: str, email: str = "") -> str:
+        stored = _room_booking_store.get(room.name, {})
+        if stored.get("bookingDeclined") == "1":
+            return "User declined booking. Do not book."
+
         if not email:
-            stored = _room_booking_store.get(room.name, {})
             email = stored.get("email", "")
             if not email:
                 return "No email stored. Ask user for email first."
 
         result, error = await _create_calendly_invitee(email, start_time)
 
-        logger.info(
-            "Calendly: booking result",
-            extra={},
-        )
+        logger.info("Calendly: booking result", extra={})
         if result:
-            logger.info(
-                "Calendly: booked event",
-                extra={},
-            )
+            logger.info("Calendly: booked event", extra={})
             logger.info(
                 f"Calendly: scheduled_event_uri={(result or {}).get('scheduled_event_uri','')} invitee_uri={(result or {}).get('invitee_uri','')}"
             )
@@ -391,63 +387,131 @@ async def entrypoint(ctx: JobContext):
 
     room = ctx.room
 
+    def _extract_payload_bytes(packet: object) -> bytes:
+        if isinstance(packet, (bytes, bytearray)):
+            return bytes(packet)
+        data_attr = getattr(packet, "data", None)
+        if isinstance(data_attr, (bytes, bytearray)):
+            return bytes(data_attr)
+        payload_attr = getattr(packet, "payload", None)
+        if isinstance(payload_attr, (bytes, bytearray)):
+            return bytes(payload_attr)
+        return b""
+
+    def _extract_topic(packet: object) -> str:
+        topic_attr = getattr(packet, "topic", None)
+        if isinstance(topic_attr, str):
+            return topic_attr
+        return ""
+
+    async def _handle_prefill_contact(packet: object) -> None:
+        topic = _extract_topic(packet)
+        if topic and topic != "prefill_contact":
+            return
+        payload = _extract_payload_bytes(packet)
+        if not payload:
+            return
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        if data.get("type") not in (None, "prefill_contact"):
+            return
+
+        existing = _room_booking_store.get(room.name, {})
+        updated = {
+            "email": str(data.get("email", existing.get("email", ""))).strip(),
+            "phone": str(data.get("phone", existing.get("phone", ""))).strip(),
+            "country": str(data.get("country", existing.get("country", ""))).strip(),
+            "countryCode": str(data.get("countryCode", existing.get("countryCode", ""))).strip(),
+            "formShown": "0",
+            "formSubmitted": "1",
+        }
+        _room_booking_store[room.name] = updated
+
+        await room.local_participant.publish_data(
+            json.dumps({"type": "prefill_confirmed", "stored": True}).encode("utf-8"),
+            topic="prefill_confirmed",
+        )
+
+    def _on_data_received(packet: object, *_args) -> None:
+        asyncio.create_task(_handle_prefill_contact(packet))
+
+    try:
+        room.on("data_received", _on_data_received)
+    except Exception:
+        pass
+
     # ------------------------------------------------------------------ #
     # Tool definitions (closed over `room` for per-room booking storage)  #
     # ------------------------------------------------------------------ #
-
-    @function_tool(description="Store email immediately after user confirms spelling.")
-    async def store_email(email: str) -> str:
-        if not EMAIL_REGEX.match(email.strip()):
-            return "Invalid email format."
-
-        existing = _room_booking_store.get(room.name, {})
-        data = {
-            "email": email.strip(),
-            "phone": existing.get("phone", ""),
-            "country": existing.get("country", ""),
-        }
-        _room_booking_store[room.name] = data
-
-        asyncio.create_task(
-            room.local_participant.publish_data(
-                json.dumps({"type": "booking_details", **data}).encode("utf-8"),
-                topic=BOOKING_DATA_TOPIC,
-            )
-        )
-        return "Email saved."
-
-    @function_tool(description="Save booking contact details after collecting email, phone, country.")
-    async def store_contact_details(email: str, country: str, phone: str = "") -> str:
-        if not EMAIL_REGEX.match(email.strip()):
-            return "Invalid email format."
-
-        data = {
-            "email": email.strip(),
-            "phone": phone.strip(),
-            "country": country.strip(),
-        }
-        _room_booking_store[room.name] = data
-
-        asyncio.create_task(
-            room.local_participant.publish_data(
-                json.dumps({"type": "booking_details", **data}).encode("utf-8"),
-                topic=BOOKING_DATA_TOPIC,
-            )
-        )
-        return "Booking details saved!"
 
     @function_tool(description="Get stored booking details.")
     async def get_stored_booking_details() -> str:
         stored = _room_booking_store.get(room.name)
         if not stored:
             return "No details stored yet."
-        return f"Stored: email {stored['email']}"
+        email = str(stored.get("email", "")).strip()
+        if not email:
+            return "No details stored yet."
+        return f"Stored: email {email}"
+
+    @function_tool(
+        description=(
+            "Show popup booking form to collect email, phone and country code. "
+            "Use this first when booking is requested and no email is stored."
+        )
+    )
+    async def show_booking_form() -> str:
+        stored = _room_booking_store.get(room.name, {})
+        if stored.get("formShown") == "1":
+            return "Booking form is already shown. Wait for user to submit."
+        _room_booking_store[room.name] = {
+            **stored,
+            "formShown": "1",
+            "formSubmitted": "0",
+            "bookingDeclined": "0",
+        }
+        await room.local_participant.publish_data(
+            json.dumps({"type": "show_booking_form"}).encode("utf-8"),
+            topic="show_booking_form",
+        )
+        return "Booking form shown. Wait for submission; do not ask contact details verbally."
+
+    @function_tool(
+        description=(
+            "Close popup booking form and stop booking flow when user declines "
+            "to book, says no demo, or refuses to fill details."
+        )
+    )
+    async def close_booking_form() -> str:
+        stored = _room_booking_store.get(room.name, {})
+        _room_booking_store[room.name] = {
+            **stored,
+            "formShown": "0",
+            "formSubmitted": "0",
+            "bookingDeclined": "1",
+        }
+        await room.local_participant.publish_data(
+            json.dumps({"type": "close_booking_form"}).encode("utf-8"),
+            topic="close_booking_form",
+        )
+        return "Booking form closed and booking flow cancelled. Continue normal conversation."
 
     @function_tool(description="Check calendar availability.")
     async def check_room_calendly_availability() -> str:
+        stored = _room_booking_store.get(room.name, {})
+        # Guard: never continue booking while the form is pending.
+        if stored.get("formShown") == "1" and not str(stored.get("email", "")).strip():
+            return "Booking form is still pending. Wait for user to submit or cancel booking."
+        # Guard: if user declined booking, do not proceed.
+        if stored.get("bookingDeclined") == "1":
+            return "User declined booking. Do not continue booking unless they ask again."
+
         slots, error = await _fetch_calendly_availability()
         if error:
-            stored = _room_booking_store.get(room.name, {})
             asyncio.create_task(
                 _trigger_calendly_fallback_mail(
                     email=stored.get("email", ""),
@@ -486,11 +550,24 @@ async def entrypoint(ctx: JobContext):
         llm=openai.realtime.RealtimeModel(
             model="gpt-4o-realtime-preview-2024-12-17",
             voice="shimmer",
-            temperature=0.8,
+            temperature=0.8,                    # FIX: was 0.8 — lower = less creative guessing
+            input_audio_transcription={
+                "model": "whisper-1",
+                "prompt": (                     # FIX: bias STT toward individual letters
+                    "The user is spelling out an email address one character at a time. "
+                    "Each spoken segment is a SINGLE letter or symbol. "
+                    "Common patterns: 'at' means @, 'dot' means ., 'underscore' means _. "
+                    "Do NOT merge letters into words. "
+                    "Example: P R E M N A T H = 'p r e m n a t h', not 'premnath'. "
+                    "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet Kilo Lima "
+                    "Mike November Oscar Papa Quebec Romeo Sierra Tango Uniform Victor Whiskey "
+                    "X-ray Yankee Zulu are NATO phonetics for single letters."
+                ),
+            },
             turn_detection={
                 "type": "server_vad",
                 "threshold": 0.9,
-                "silence_duration_ms": 1000,
+                "silence_duration_ms": 1500,    # FIX: was 1000 — more pause tolerance for spelling
                 "prefix_padding_ms": 300,
             },
         ),
@@ -501,9 +578,9 @@ async def entrypoint(ctx: JobContext):
     agent = Agent(
         instructions=KNOWLEDGE_PROMPT,
         tools=[
-            store_email,
-            store_contact_details,
             get_stored_booking_details,
+            show_booking_form,
+            close_booking_form,
             check_room_calendly_availability,
             book_calendly_meeting,
         ],
@@ -512,10 +589,11 @@ async def entrypoint(ctx: JobContext):
     session_start = time.perf_counter()
     await session.start(agent=agent, room=room)
     logger.info(f"Session started in {time.perf_counter() - session_start:.2f}s")
-#---------------------------------------------------------------------------------------------------
+
     # ------------------------------------------------------------------ #
     # Console transcript logs                                              #
     # ------------------------------------------------------------------ #
+
     def _extract_text_content(content) -> str:
         if isinstance(content, str):
             return content.strip()
@@ -546,15 +624,12 @@ async def entrypoint(ctx: JobContext):
         role = getattr(item, "role", "")
         if role != "assistant":
             return
-
         text = _extract_text_content(getattr(item, "content", ""))
         if text:
             logger.info(f"[AI] {text}")
-#--------------------------------------------------------------------------------------------------
+
     # ------------------------------------------------------------------ #
-    # Fire greeting immediately after session starts — don't wait for   #
-    # the participant to connect. The greeting will buffer and play     #
-    # once the participant subscribes to the agent audio track.         #
+    # Fire greeting immediately after session starts                      #
     # ------------------------------------------------------------------ #
 
     asyncio.create_task(_send_greeting(session, start_time))
