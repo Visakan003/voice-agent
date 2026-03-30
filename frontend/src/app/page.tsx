@@ -52,13 +52,13 @@ function BookingFormPopup({
         <select
           value={values.countryCode}
           onChange={(e) => onChange("countryCode", e.target.value)}
-          className="mt-1 mb-3 w-full rounded-lg border border-white/20 bg-black/25 text-white px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-400/60"
+          className="mt-1 mb-3 w-full rounded-lg border border-white/20 bg-black/25 text-black px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-400/60"
         >
-          <option value="+1">+1 (US/Canada)</option>
-          <option value="+44">+44 (UK)</option>
-          <option value="+91">+91 (India)</option>
-          <option value="+61">+61 (Australia)</option>
-          <option value="+971">+971 (UAE)</option>
+          <option value="+1" className="text-black">+1 (US/Canada)</option>
+          <option value="+44" className="text-black">+44 (UK)</option>
+          <option value="+91" className="text-black">+91 (India)</option>
+          <option value="+61" className="text-black">+61 (Australia)</option>
+          <option value="+971" className="text-black">+971 (UAE)</option>
         </select>
 
         <label className="text-xs text-cyan-200">Phone</label>
@@ -106,20 +106,20 @@ function SpeakingAnimation({ state }: { state: string }) {
   const coreColor = isSpeaking
     ? "#3b82f6"
     : isListening
-    ? "#22c55e"
-    : isThinking
-    ? "#8b5cf6"
-    : "#374151";
+      ? "#22c55e"
+      : isThinking
+        ? "#8b5cf6"
+        : "#374151";
 
   const label = isSpeaking
     ? "Agent is speaking..."
     : isListening
-    ? "Listening..."
-    : isThinking
-    ? "Thinking..."
-    : isConnecting
-    ? "Connecting..."
-    : "Connected";
+      ? "Listening..."
+      : isThinking
+        ? "Thinking..."
+        : isConnecting
+          ? "Connecting..."
+          : "Connected";
 
   return (
     <div className="flex flex-col items-center gap-6">
@@ -250,7 +250,7 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
       if (AudioCtx) {
         const ctx = new AudioCtx();
         if (ctx.state === "suspended") {
-          ctx.resume().catch(() => {});
+          ctx.resume().catch(() => { });
         }
       }
     } catch {
@@ -472,8 +472,8 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
   const displayState = !roomConnected
     ? "connecting"
     : !agentSpokeOnce
-    ? "thinking"
-    : state;
+      ? "thinking"
+      : state;
 
   return (
     <div className="relative flex flex-col items-center justify-center min-h-screen gap-8 overflow-hidden bg-gradient-to-br from-slate-950 via-indigo-950 to-fuchsia-950 text-white">
@@ -497,11 +497,10 @@ function VoiceAssistantUI({ onDisconnect }: { onDisconnect: () => void }) {
       <div className="flex gap-4">
         <button
           onClick={toggleMute}
-          className={`px-6 py-3 rounded-full font-medium transition-all duration-300 ${
-            isMuted
+          className={`px-6 py-3 rounded-full font-medium transition-all duration-300 ${isMuted
               ? "bg-yellow-500/90 hover:bg-yellow-500"
               : "bg-white/20 hover:bg-white/30"
-          }`}
+            }`}
         >
           {isMuted ? (
             <span className="flex items-center gap-2">
@@ -641,7 +640,7 @@ export default function Home() {
         window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtx) {
         const ctx = new AudioCtx();
-        if (ctx.state === "suspended") ctx.resume().catch(() => {});
+        if (ctx.state === "suspended") ctx.resume().catch(() => { });
       }
     } catch {
       // non-fatal

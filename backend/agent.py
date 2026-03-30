@@ -404,46 +404,6 @@ async def entrypoint(ctx: JobContext):
             return topic_attr
         return ""
 
-    async def _handle_prefill_contact(packet: object) -> None:
-        topic = _extract_topic(packet)
-        if topic and topic != "prefill_contact":
-            return
-        payload = _extract_payload_bytes(packet)
-        if not payload:
-            return
-        try:
-            data = json.loads(payload.decode("utf-8"))
-        except Exception:
-            return
-        if not isinstance(data, dict):
-            return
-        if data.get("type") not in (None, "prefill_contact"):
-            return
-
-        existing = _room_booking_store.get(room.name, {})
-        updated = {
-            "email": str(data.get("email", existing.get("email", ""))).strip(),
-            "phone": str(data.get("phone", existing.get("phone", ""))).strip(),
-            "country": str(data.get("country", existing.get("country", ""))).strip(),
-            "countryCode": str(data.get("countryCode", existing.get("countryCode", ""))).strip(),
-            "formShown": "0",
-            "formSubmitted": "1",
-        }
-        _room_booking_store[room.name] = updated
-
-        await room.local_participant.publish_data(
-            json.dumps({"type": "prefill_confirmed", "stored": True}).encode("utf-8"),
-            topic="prefill_confirmed",
-        )
-
-    def _on_data_received(packet: object, *_args) -> None:
-        asyncio.create_task(_handle_prefill_contact(packet))
-
-    try:
-        room.on("data_received", _on_data_received)
-    except Exception:
-        pass
-
     # ------------------------------------------------------------------ #
     # Tool definitions (closed over `room` for per-room booking storage)  #
     # ------------------------------------------------------------------ #
@@ -589,6 +549,65 @@ async def entrypoint(ctx: JobContext):
     session_start = time.perf_counter()
     await session.start(agent=agent, room=room)
     logger.info(f"Session started in {time.perf_counter() - session_start:.2f}s")
+
+    async def _handle_prefill_contact(packet: object) -> None:
+        topic = _extract_topic(packet)
+        if topic and topic != "prefill_contact":
+            return
+        payload = _extract_payload_bytes(packet)
+        if not payload:
+            return
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        if data.get("type") not in (None, "prefill_contact"):
+            return
+
+        existing = _room_booking_store.get(room.name, {})
+        was_awaiting_form = existing.get("formShown") == "1"
+        updated = {
+            "email": str(data.get("email", existing.get("email", ""))).strip(),
+            "phone": str(data.get("phone", existing.get("phone", ""))).strip(),
+            "country": str(data.get("country", existing.get("country", ""))).strip(),
+            "countryCode": str(data.get("countryCode", existing.get("countryCode", ""))).strip(),
+            "formShown": "0",
+            "formSubmitted": "1",
+        }
+        _room_booking_store[room.name] = updated
+
+        await room.local_participant.publish_data(
+            json.dumps({"type": "prefill_confirmed", "stored": True}).encode("utf-8"),
+            topic="prefill_confirmed",
+        )
+
+        # Notify the realtime agent immediately — no need for the user to say they submitted.
+        if not was_awaiting_form:
+            return
+        try:
+            await session.generate_reply(
+                user_input=(
+                    "The user submitted the booking form in the app. Their contact details are "
+                    "stored. Do not ask them to confirm. Call check_room_calendly_availability now, "
+                    "then offer two or three time slots."
+                ),
+                instructions=(
+                    "Proceed with the booking flow: run the availability tool, then speak the slots "
+                    "clearly and briefly."
+                ),
+            )
+        except Exception as e:
+            logger.warning("post-form generate_reply failed: %s", e)
+
+    def _on_data_received(packet: object, *_args) -> None:
+        asyncio.create_task(_handle_prefill_contact(packet))
+
+    try:
+        room.on("data_received", _on_data_received)
+    except Exception:
+        pass
 
     # ------------------------------------------------------------------ #
     # Console transcript logs                                              #
