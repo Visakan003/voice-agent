@@ -12,6 +12,72 @@ import "@livekit/components-styles";
 
 const BOOKING_STORAGE_KEY = "zia_booking_details";
 
+/** Dial codes for the booking form; labels are English country/region names. */
+const COUNTRY_DIAL_CODES: readonly { code: string; label: string }[] = [
+  { code: "+1", label: "United States / Canada" },
+  { code: "+44", label: "United Kingdom" },
+  { code: "+91", label: "India" },
+  { code: "+61", label: "Australia" },
+  { code: "+64", label: "New Zealand" },
+  { code: "+971", label: "United Arab Emirates" },
+  { code: "+966", label: "Saudi Arabia" },
+  { code: "+974", label: "Qatar" },
+  { code: "+973", label: "Bahrain" },
+  { code: "+968", label: "Oman" },
+  { code: "+972", label: "Israel" },
+  { code: "+962", label: "Jordan" },
+  { code: "+961", label: "Lebanon" },
+  { code: "+20", label: "Egypt" },
+  { code: "+27", label: "South Africa" },
+  { code: "+234", label: "Nigeria" },
+  { code: "+254", label: "Kenya" },
+  { code: "+255", label: "Tanzania" },
+  { code: "+256", label: "Uganda" },
+  { code: "+65", label: "Singapore" },
+  { code: "+60", label: "Malaysia" },
+  { code: "+66", label: "Thailand" },
+  { code: "+62", label: "Indonesia" },
+  { code: "+63", label: "Philippines" },
+  { code: "+84", label: "Vietnam" },
+  { code: "+880", label: "Bangladesh" },
+  { code: "+92", label: "Pakistan" },
+  { code: "+94", label: "Sri Lanka" },
+  { code: "+977", label: "Nepal" },
+  { code: "+86", label: "China" },
+  { code: "+852", label: "Hong Kong" },
+  { code: "+886", label: "Taiwan" },
+  { code: "+81", label: "Japan" },
+  { code: "+82", label: "South Korea" },
+  { code: "+49", label: "Germany" },
+  { code: "+33", label: "France" },
+  { code: "+39", label: "Italy" },
+  { code: "+34", label: "Spain" },
+  { code: "+31", label: "Netherlands" },
+  { code: "+32", label: "Belgium" },
+  { code: "+41", label: "Switzerland" },
+  { code: "+43", label: "Austria" },
+  { code: "+353", label: "Ireland" },
+  { code: "+351", label: "Portugal" },
+  { code: "+46", label: "Sweden" },
+  { code: "+47", label: "Norway" },
+  { code: "+45", label: "Denmark" },
+  { code: "+358", label: "Finland" },
+  { code: "+48", label: "Poland" },
+  { code: "+420", label: "Czech Republic" },
+  { code: "+36", label: "Hungary" },
+  { code: "+40", label: "Romania" },
+  { code: "+30", label: "Greece" },
+  { code: "+7", label: "Russia / Kazakhstan" },
+  { code: "+380", label: "Ukraine" },
+  { code: "+90", label: "Turkey" },
+  { code: "+52", label: "Mexico" },
+  { code: "+55", label: "Brazil" },
+  { code: "+54", label: "Argentina" },
+  { code: "+56", label: "Chile" },
+  { code: "+57", label: "Colombia" },
+  { code: "+51", label: "Peru" },
+];
+
 type BookingFormValues = {
   email: string;
   countryCode: string;
@@ -32,53 +98,74 @@ function BookingFormPopup({
   onSubmit: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-2xl border border-white/20 bg-white/10 backdrop-blur-xl shadow-2xl p-5">
-        <h3 className="text-lg font-semibold text-white">Quick Booking Form</h3>
-        <p className="text-sm text-gray-200 mt-1 mb-4">
-          Fill this once and I will fetch available slots for you.
-        </p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4">
+      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/15 bg-black/25 shadow-2xl backdrop-blur-md">
+        <div className="pointer-events-none absolute -top-16 -left-16 h-48 w-48 rounded-full bg-cyan-500/25 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-20 -right-12 h-56 w-56 rounded-full bg-fuchsia-500/25 blur-3xl" />
+        <div className="relative p-5">
+          <h3 className="text-lg font-semibold tracking-wide text-white">
+            Quick Booking Form
+          </h3>
+          <p className="mt-1 mb-4 text-sm text-white/75">
+            Fill this once and I will fetch available slots for you.
+          </p>
 
-        <label className="text-xs text-cyan-200">Email</label>
-        <input
-          value={values.email}
-          onChange={(e) => onChange("email", e.target.value)}
-          type="email"
-          className="mt-1 mb-3 w-full rounded-lg border border-white/20 bg-black/25 text-white px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-400/60"
-          placeholder="you@example.com"
-        />
+          <label className="text-xs uppercase tracking-wider text-cyan-300/90">
+            Email
+          </label>
+          <input
+            value={values.email}
+            onChange={(e) => onChange("email", e.target.value)}
+            type="email"
+            className="mt-1 mb-3 w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-white outline-none placeholder:text-white/35 focus:ring-2 focus:ring-cyan-400/60"
+            placeholder="you@example.com"
+          />
 
-        <label className="text-xs text-cyan-200">Country Code</label>
-        <select
-          value={values.countryCode}
-          onChange={(e) => onChange("countryCode", e.target.value)}
-          className="mt-1 mb-3 w-full rounded-lg border border-white/20 bg-black/25 text-black px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-400/60"
-        >
-          <option value="+1" className="text-black">+1 (US/Canada)</option>
-          <option value="+44" className="text-black">+44 (UK)</option>
-          <option value="+91" className="text-black">+91 (India)</option>
-          <option value="+61" className="text-black">+61 (Australia)</option>
-          <option value="+971" className="text-black">+971 (UAE)</option>
-        </select>
+          <label className="text-xs uppercase tracking-wider text-cyan-300/90">
+            Country code
+          </label>
+          <select
+            value={values.countryCode}
+            onChange={(e) => onChange("countryCode", e.target.value)}
+            className="mt-1 mb-3 w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-white outline-none focus:ring-2 focus:ring-cyan-400/60"
+          >
+            {COUNTRY_DIAL_CODES.map(({ code, label }) => (
+              <option
+                key={code + label}
+                value={code}
+                className="bg-slate-950 text-white"
+              >
+                {code} — {label}
+              </option>
+            ))}
+          </select>
 
-        <label className="text-xs text-cyan-200">Phone</label>
-        <input
-          value={values.phone}
-          onChange={(e) => onChange("phone", e.target.value)}
-          type="tel"
-          className="mt-1 w-full rounded-lg border border-white/20 bg-black/25 text-white px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-400/60"
-          placeholder="9876543210"
-        />
+          <label className="text-xs uppercase tracking-wider text-cyan-300/90">
+            Phone
+          </label>
+          <input
+            value={values.phone}
+            onChange={(e) => onChange("phone", e.target.value)}
+            type="tel"
+            className="mt-1 w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-white outline-none placeholder:text-white/35 focus:ring-2 focus:ring-cyan-400/60"
+            placeholder="Digits only (no country code)"
+          />
 
-        {error && <p className="text-red-300 text-xs mt-3">{error}</p>}
+          {error && (
+            <p className="mt-3 text-xs text-red-300/95" role="alert">
+              {error}
+            </p>
+          )}
 
-        <button
-          onClick={onSubmit}
-          disabled={submitting}
-          className="mt-4 w-full rounded-lg bg-gradient-to-r from-cyan-500 to-fuchsia-500 px-4 py-2.5 font-medium text-white disabled:opacity-60"
-        >
-          {submitting ? "Submitting..." : "Submit Details"}
-        </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={submitting}
+            className="mt-4 w-full rounded-full bg-gradient-to-r from-cyan-500 to-fuchsia-500 px-4 py-2.5 font-medium text-white shadow-[0_0_20px_rgba(34,211,238,0.25)] transition hover:brightness-110 disabled:opacity-60"
+          >
+            {submitting ? "Submitting..." : "Submit Details"}
+          </button>
+        </div>
       </div>
     </div>
   );
